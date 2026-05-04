@@ -1,0 +1,27 @@
+[Unit]
+Description=Tonkl Website (Next.js)
+Documentation=https://tonkl.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tonkl
+Group=tonkl
+WorkingDirectory=/opt/tonkl/web
+ExecStart=/usr/bin/node /opt/tonkl/web/node_modules/.bin/next start -p 3001
+Restart=on-failure
+RestartSec=5
+
+# Environment
+EnvironmentFile=/opt/tonkl/web/.env.production.local
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/tonkl/web/.next
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

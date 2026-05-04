@@ -1,0 +1,30 @@
+[Unit]
+Description=Tonkl Protocol Node
+Documentation=https://tonkl.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=obscura
+Group=obscura
+WorkingDirectory=/opt/obscura/node
+ExecStart=/opt/obscura/node/target/release/obscura-node run --rpc-addr 127.0.0.1:9100
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/obscura/node/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+# Environment
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
