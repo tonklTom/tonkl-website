@@ -1,7 +1,12 @@
-import { Warp } from "@paper-design/shaders-react";
+"use client";
+
 import { Wallet, Bot } from "lucide-react";
+import { useScreenSize } from "@/hooks/use-screen-size";
+import { PixelTrail } from "@/components/ui/pixel-trail";
+import { GooeyFilter } from "@/components/ui/gooey-filter";
 
 export default function WarpShaderHero({ onLaunchWallet }: { onLaunchWallet?: () => void }) {
+  const screenSize = useScreenSize();
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#020202]">
       <nav className="absolute top-0 left-0 w-full px-6 py-8 md:px-12 flex items-center justify-between z-50 pointer-events-auto">
@@ -17,25 +22,24 @@ export default function WarpShaderHero({ onLaunchWallet }: { onLaunchWallet?: ()
         </button>
       </nav>
 
-      <div className="absolute inset-0 z-0">
-        <Warp
-          style={{ height: "100%", width: "100%" }}
-          proportion={0.45}
-          softness={1}
-          distortion={0.25}
-          swirl={0.8}
-          swirlIterations={10}
-          shape="checks"
-          shapeScale={0.1}
-          scale={1}
-          rotation={0}
-          speed={1}
-          colors={[
-            "hsl(220, 100%, 12%)",    // Deep royal blue
-            "hsl(180, 100%, 18%)",    // Deep cyan
-            "hsl(200, 80%, 8%)",      // Very dark blue
-            "hsl(190, 90%, 22%)"      // Vibrant deep sea blue
-          ]}
+      <div className="absolute inset-0 z-0 bg-black">
+        <img 
+          src="/dark_ethereal_bg.png" 
+          alt="Tonkl Background"
+          className="w-full h-full object-cover opacity-80" 
+        />
+      </div>
+
+      <GooeyFilter id="gooey-filter-pixel-trail" strength={6} />
+      <div
+        className="absolute inset-0 z-[5]"
+        style={{ filter: "url(#gooey-filter-pixel-trail)" }}
+      >
+        <PixelTrail
+          pixelSize={screenSize.lessThan('md') ? 24 : 32}
+          fadeDuration={0}
+          delay={500}
+          pixelClassName="bg-white rounded-sm"
         />
       </div>
 

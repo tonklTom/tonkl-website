@@ -32,6 +32,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
+import { createSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -43,7 +44,9 @@ const WALLET_DB =
   process.env.TONKL_WALLET_DB || process.env.OBSCURA_WALLET_DB || "";
 const PYTHON = process.env.TONKL_PYTHON || process.env.OBSCURA_PYTHON || "python3";
 
-const RATE_LIMIT = { max: 20, windowMs: 60_000 };
+// Separate rate limits: create/restore are expensive (PBKDF2 + disk I/O), unlock is cheap
+const RATE_LIMIT_MUTATE = { max: 3, windowMs: 60_000 };  // create, restore
+const RATE_LIMIT_UNLOCK = { max: 20, windowMs: 60_000 }; // unlock
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_BODY_SIZE = 4 * 1024; // 4 KB
 const MAX_CONCURRENT = 1; // Only one onboarding at a time
@@ -92,7 +95,11 @@ export async function POST(request: Request) {
   // ── Rate limit (exempt "check" — it's just a filesystem stat) ──
   if (action !== "check") {
     const clientKey = getClientKey(request);
-    const limited = checkRateLimit("onboard", clientKey, RATE_LIMIT);
+    // Stricter limits for create/restore (expensive), looser for unlock (cheap)
+    const rateConfig = (action === "create" || action === "restore")
+      ? RATE_LIMIT_MUTATE
+      : RATE_LIMIT_UNLOCK;
+    const limited = checkRateLimit(`onboard-${action}`, clientKey, rateConfig);
     if (limited) return limited;
   }
 
@@ -178,10 +185,11 @@ async function handleCreate(passphrase?: string): Promise<Response> {
   // Run: init-seed --json (generates seed + derives first key)
   // The CLI outputs the mnemonic to stdout
   const args: string[] = [];
-  if (passphrase) args.push("--passphrase", passphrase);
+  // SECURITY: Pass passphrase via stdin to avoid ps visibility
+  if (passphrase) args.push("--passphrase-stdin");
   args.push("--json", "init-seed");
 
-  const output = await runWalletArgs(args);
+  const output = await runWalletArgs(args, passphrase);
 
   // Parse the JSON output from --json mode
   let result;
@@ -205,9 +213,9 @@ async function handleCreate(passphrase?: string): Promise<Response> {
   if (!address) {
     try {
       const keyArgs: string[] = [];
-      if (passphrase) keyArgs.push("--passphrase", passphrase);
+      if (passphrase) keyArgs.push("--passphrase-stdin");
       keyArgs.push("--json", "list-keys");
-      const keyOutput = await runWalletArgs(keyArgs);
+      const keyOutput = await runWalletArgs(keyArgs, passphrase);
       const keyResult = JSON.parse(keyOutput);
       if (keyResult.keys && keyResult.keys.length > 0) {
         address = keyResult.keys[0].pk_x;
@@ -217,10 +225,14 @@ async function handleCreate(passphrase?: string): Promise<Response> {
     }
   }
 
+  // Generate session token for authenticated API access
+  const sessionToken = createSession(address || "new-wallet");
+
   return Response.json({
     success: true,
     mnemonic: result.mnemonic,
     address,
+    sessionToken,
   });
 }
 
@@ -246,19 +258,19 @@ async function handleRestore(
   // Run: restore-seed word1 word2 ... --json
   const words = cleaned.split(" ");
   const args: string[] = [];
-  if (passphrase) args.push("--passphrase", passphrase);
+  if (passphrase) args.push("--passphrase-stdin");
   args.push("--json", "restore-seed", ...words);
 
-  await runWalletArgs(args);
+  await runWalletArgs(args, passphrase);
 
   // Get derived address
   const keyArgs: string[] = [];
-  if (passphrase) keyArgs.push("--passphrase", passphrase);
+  if (passphrase) keyArgs.push("--passphrase-stdin");
   keyArgs.push("--json", "list-keys");
 
   let address = "";
   try {
-    const keyOutput = await runWalletArgs(keyArgs);
+    const keyOutput = await runWalletArgs(keyArgs, passphrase);
     const keyResult = JSON.parse(keyOutput);
     if (keyResult.keys && keyResult.keys.length > 0) {
       address = keyResult.keys[0].pk_x;
@@ -267,9 +279,12 @@ async function handleRestore(
     // Non-critical
   }
 
+  const sessionToken = createSession(address || "restored-wallet");
+
   return Response.json({
     success: true,
     address,
+    sessionToken,
   });
 }
 
@@ -277,11 +292,11 @@ async function handleUnlock(passphrase?: string): Promise<Response> {
   // Try to open the wallet with the given passphrase by running a read-only command
   // If the passphrase is wrong, SQLCipher will fail with "file is not a database"
   const args: string[] = [];
-  if (passphrase) args.push("--passphrase", passphrase);
+  if (passphrase) args.push("--passphrase-stdin");
   args.push("--json", "list-keys");
 
   try {
-    const output = await runWalletArgs(args);
+    const output = await runWalletArgs(args, passphrase);
     const result = JSON.parse(output);
 
     let address = "";
@@ -289,10 +304,13 @@ async function handleUnlock(passphrase?: string): Promise<Response> {
       address = result.keys[0].pk_x;
     }
 
+    const sessionToken = createSession(address || "unlocked-wallet");
+
     return Response.json({
       unlocked: true,
       address,
       keyCount: result.keys?.length || 0,
+      sessionToken,
     });
   } catch {
     return Response.json(
@@ -329,7 +347,7 @@ function parseInitSeedOutput(output: string): { mnemonic?: string } | null {
   return null;
 }
 
-function runWalletArgs(extraArgs: string[]): Promise<string> {
+function runWalletArgs(extraArgs: string[], passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     activeOps++;
 
@@ -338,7 +356,7 @@ function runWalletArgs(extraArgs: string[]): Promise<string> {
     args.push(...extraArgs);
 
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
@@ -347,9 +365,15 @@ function runWalletArgs(extraArgs: string[]): Promise<string> {
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    // SECURITY: Write passphrase via stdin instead of CLI arg
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";

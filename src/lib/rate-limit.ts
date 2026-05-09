@@ -102,14 +102,38 @@ export function checkRateLimit(
 
 /**
  * Extract a usable client identifier from the request.
- * Prefers X-Forwarded-For (behind nginx), falls back to a constant.
+ *
+ * SECURITY: X-Forwarded-For is trivially spoofable by clients. We prefer
+ * X-Real-IP (which a trusted reverse proxy sets from the actual connection
+ * IP), then fall back to X-Forwarded-For, then to a hash of available
+ * headers to avoid the "everyone shares 'unknown'" problem.
  */
 export function getClientKey(request: Request): string {
+  // 1. X-Real-IP — set by trusted reverse proxy (nginx, Cloudflare)
+  const realIp = request.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+
+  // 2. Vercel-specific header (cannot be spoofed by clients)
+  const vercelIp = request.headers.get("x-vercel-forwarded-for");
+  if (vercelIp) return vercelIp.split(",")[0].trim();
+
+  // 3. X-Forwarded-For — last resort, spoofable but better than nothing
   const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    // Take the first IP (client IP before any proxies)
-    return forwarded.split(",")[0].trim();
+  if (forwarded) return forwarded.split(",")[0].trim();
+
+  // 4. Fallback — hash available headers for a semi-unique key
+  // This prevents all unproxied requests from sharing one bucket
+  const ua = request.headers.get("user-agent") || "";
+  const accept = request.headers.get("accept-language") || "";
+  if (ua || accept) {
+    // Simple hash to create a per-client bucket without storing raw headers
+    let hash = 0;
+    const key = `${ua}|${accept}`;
+    for (let i = 0; i < key.length; i++) {
+      hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+    }
+    return `ua_${hash.toString(36)}`;
   }
-  // Fallback — in dev there's no forwarded header
-  return request.headers.get("x-real-ip") || "unknown";
+
+  return "unknown";
 }

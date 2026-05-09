@@ -37,6 +37,9 @@ yarn-error.log*
 *.db
 *.sqlite
 
+# runtime token metadata
+.token-metadata/
+
 # vercel
 .vercel
 

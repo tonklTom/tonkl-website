@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -8,6 +9,14 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_TURNS = 12;
 const MAX_HISTORY_CONTENT_LENGTH = 1200;
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_STDOUT_SIZE = 32_768; // Cap stdout to prevent memory exhaustion
+
+// ─── Rate limit: 20 requests per minute per IP ──────────────────
+const RATE_LIMIT = { max: 20, windowMs: 60_000 };
+
+// ─── Concurrent execution limit ─────────────────────────────────
+const MAX_CONCURRENT = 3;
+let activeShlem = 0;
 
 type ShlemHistoryTurn = {
   role: "user" | "assistant";
@@ -82,6 +91,19 @@ type ShlemErrorResponse = {
 };
 
 export async function POST(request: Request) {
+  // ── Rate limit ──────────────────────────────────────────────
+  const clientKey = getClientKey(request);
+  const limited = checkRateLimit("shlem", clientKey, RATE_LIMIT);
+  if (limited) return limited;
+
+  // ── Concurrent limit ────────────────────────────────────────
+  if (activeShlem >= MAX_CONCURRENT) {
+    return Response.json(
+      { error: "server_busy", reply: "Shlem is handling other requests. Try again in a moment." },
+      { status: 503 }
+    );
+  }
+
   let body: unknown;
 
   try {
@@ -109,11 +131,55 @@ export async function POST(request: Request) {
   }
 
   try {
+    const context = typeof (body as { context?: unknown }).context === "string"
+      ? (body as { context: string }).context
+      : undefined;
+    const currentForm = (body as { currentForm?: unknown }).currentForm as Record<string, unknown> | undefined;
     const history = parseHistory((body as { history?: unknown }).history);
-    const payload = await runShlem(message, history);
+    const payload = await runShlem(message, history, context);
+
+    // When in token_creation context, extract fields and override generic fallback replies
+    // But first check if the user is exiting token creation
+    const isExiting = context === "token_creation" && isExitingTokenCreation(message);
+    if (context === "token_creation" && !isExiting) {
+      const extracted = extractTokenFields(message, currentForm);
+      const hasExtracted = Object.keys(extracted).length > 0;
+
+      if (hasExtracted) {
+        if (!payload.execution) {
+          payload.execution = { ok: true, message: "Fields extracted from conversation.", data: {} };
+        }
+        if (!payload.execution.data) {
+          payload.execution.data = {} as ShlemExecutionData;
+        }
+        (payload.execution.data as Record<string, unknown>).extracted_fields = extracted;
+      }
+
+      // Generate a contextual token creation reply when the LLM is unavailable
+      // (fallback mode) — instead of the generic "unknown" response
+      const isGenericFallback = !payload.model?.ok && (
+        payload.intent === "unknown" ||
+        payload.intent === "help" ||
+        !payload.intent
+      );
+
+      if (isGenericFallback) {
+        const reply = buildTokenCreationReply(extracted, currentForm);
+        // Override the generic fallback message
+        payload.message = reply;
+        // Also override model text if it was a fallback
+        if (payload.model) {
+          payload.model.text = reply;
+        }
+      }
+    }
+
     const summary = summarizeShlemPayload(payload);
     const response: ShlemApiResponse = {
-      reply: formatShlemReply(payload),
+      // In token_creation context with a custom reply, use the payload message
+      reply: context === "token_creation" && payload.message && !payload.model?.ok
+        ? payload.message
+        : formatShlemReply(payload),
       payload,
       ...summary,
     };
@@ -161,7 +227,7 @@ function parseHistory(value: unknown): ShlemHistoryTurn[] {
     });
 }
 
-function runShlem(message: string, history: ShlemHistoryTurn[]): Promise<ShlemPayload> {
+function runShlem(message: string, history: ShlemHistoryTurn[], context?: string): Promise<ShlemPayload> {
   const shlemDir = process.env.SHLEM_DIR || DEFAULT_SHLEM_DIR;
   const python = process.env.SHLEM_PYTHON || "python3";
   const pythonPath = `${shlemDir}/src`;
@@ -179,6 +245,9 @@ function runShlem(message: string, history: ShlemHistoryTurn[]): Promise<ShlemPa
   if (walletCmd) {
     args.push("--wallet-cmd", walletCmd);
   }
+  if (context) {
+    args.push("--context", context);
+  }
   if (shouldCaptureLearning()) {
     args.push("--learn");
   }
@@ -189,19 +258,31 @@ function runShlem(message: string, history: ShlemHistoryTurn[]): Promise<ShlemPa
   }
 
   return new Promise((resolve, reject) => {
+    activeShlem++;
+
+    // SECURITY: Only pass minimum required env vars — never spread process.env
+    const safeEnv: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      HOME: process.env.HOME || "/tmp",
+      LANG: process.env.LANG || "en_US.UTF-8",
+      NODE_ENV: process.env.NODE_ENV,
+      SHLEM_NODE_URL: nodeUrl,
+      PYTHONPATH: process.env.PYTHONPATH
+        ? `${pythonPath}:${process.env.PYTHONPATH}`
+        : pythonPath,
+    };
+    if (walletCmd) safeEnv.SHLEM_WALLET_CMD = walletCmd;
+    if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
+    if (process.env.NARGO_PATH) {
+      safeEnv.PATH = `${process.env.NARGO_PATH}:${safeEnv.PATH}`;
+    }
+
     const child = spawn(
       python,
       args,
       {
         cwd: shlemDir,
-        env: {
-          ...process.env,
-          SHLEM_NODE_URL: nodeUrl,
-          ...(walletCmd ? { SHLEM_WALLET_CMD: walletCmd } : {}),
-          PYTHONPATH: process.env.PYTHONPATH
-            ? `${pythonPath}:${process.env.PYTHONPATH}`
-            : pythonPath,
-        },
+        env: safeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
@@ -211,26 +292,30 @@ function runShlem(message: string, history: ShlemHistoryTurn[]): Promise<ShlemPa
 
     const timeout = setTimeout(() => {
       child.kill("SIGTERM");
+      activeShlem--;
       reject(new Error("Shlem CLI timed out"));
     }, REQUEST_TIMEOUT_MS);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      // SECURITY: Cap stdout to prevent memory exhaustion
+      if (stdout.length < MAX_STDOUT_SIZE) stdout += chunk;
     });
 
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      if (stderr.length < 4096) stderr += chunk;
     });
 
     child.on("error", (error) => {
       clearTimeout(timeout);
+      activeShlem--;
       reject(error);
     });
 
     child.on("close", (code) => {
       clearTimeout(timeout);
+      activeShlem--;
 
       if (code !== 0) {
         reject(new Error(stderr.trim() || `Shlem CLI exited with code ${code}`));
@@ -456,4 +541,226 @@ function trimReadOnlySummary(value: string): string {
   return trimmed.length > maxLength
     ? `${trimmed.slice(0, maxLength)}\n...`
     : trimmed;
+}
+
+// ─── Token creation conversational replies ────────────────────
+
+type TokenFormState = Record<string, unknown>;
+
+function buildTokenCreationReply(
+  extracted: TokenFields,
+  currentForm?: TokenFormState,
+): string {
+  // Merge current form state with newly extracted fields to see what we have
+  const merged = { ...(currentForm || {}), ...extracted };
+  const hasSymbol = Boolean(merged.symbol);
+  const hasName = Boolean(merged.name);
+  const hasSupply = Boolean(merged.initialSupply) && String(merged.initialSupply) !== "0";
+  const hasCategory = Boolean(merged.category);
+  const hasDescription = Boolean(merged.description) && String(merged.description).length >= 10;
+
+  const hasNew = Object.keys(extracted).length > 0;
+
+  // Acknowledge what was just extracted
+  const parts: string[] = [];
+  if (hasNew) {
+    const items: string[] = [];
+    if (extracted.name) items.push(`name ${extracted.name}`);
+    if (extracted.symbol) items.push(`symbol ${extracted.symbol}`);
+    if (extracted.category) items.push(`category ${extracted.category}`);
+    if (extracted.initialSupply) items.push(`supply of ${parseInt(extracted.initialSupply).toLocaleString()}`);
+    if (extracted.decimals !== undefined) items.push(`${extracted.decimals} decimals`);
+    if (extracted.burnRate) items.push(`burn rate of ${extracted.burnRate} bps`);
+    if (extracted.echoRate) items.push(`echo rate of ${extracted.echoRate} bps`);
+    parts.push(`Got it, ${items.join(", ")}.`);
+  }
+
+  // Ask for what's missing
+  const missing: string[] = [];
+  if (!hasSymbol) missing.push("a symbol (like VIBE or DAO)");
+  if (!hasName) missing.push("a name for the token");
+  if (!hasSupply) missing.push("the initial supply (how many tokens to mint)");
+  if (!hasDescription) missing.push("a short description of what the token is for");
+
+  if (missing.length === 0) {
+    parts.push(
+      `That covers the essentials. You can switch to the form to review everything and create the token, or tell me if you want to adjust anything like decimals, burn rate, or socials.`
+    );
+  } else if (missing.length === 1) {
+    parts.push(`I still need ${missing[0]} to fill out the basics.`);
+  } else {
+    const last = missing.pop()!;
+    parts.push(`I still need ${missing.join(", ")}, and ${last}.`);
+  }
+
+  return parts.join(" ");
+}
+
+// ─── Exit intent detection ───────────────────────────────────
+
+function isExitingTokenCreation(message: string): boolean {
+  const lower = message.toLowerCase();
+  const exitPatterns = [
+    /\b(?:changed?\s+my\s+mind|never\s*mind|forget\s+(?:it|the\s+token|about)|cancel|stop\s+(?:creating|the\s+token)|don'?t\s+want\s+(?:to\s+create|the\s+token)|skip\s+(?:it|the\s+token|that))\b/,
+    /\b(?:instead|actually)\b.*\b(?:want\s+to|let'?s|can\s+(?:you|i|we))\b/,
+    /\bi\s+(?:want\s+to|wanna|need\s+to)\s+(?:stake|send|receive|transfer|check|see|view|swap)\b/,
+  ];
+  return exitPatterns.some((p) => p.test(lower));
+}
+
+// ─── Token field extraction ───────────────────────────────────
+
+type TokenFields = {
+  symbol?: string;
+  name?: string;
+  description?: string;
+  category?: string;
+  initialSupply?: string;
+  decimals?: number;
+  burnRate?: string;
+  echoRate?: string;
+};
+
+const VALID_CATEGORIES = new Set([
+  "utility", "governance", "meme", "stablecoin",
+  "impact", "community", "gaming", "rwa", "other",
+]);
+
+const CATEGORY_DISPLAY: Record<string, string> = {
+  utility: "Utility", governance: "Governance", meme: "Meme",
+  stablecoin: "Stablecoin", impact: "Impact", community: "Community",
+  gaming: "Gaming", rwa: "RWA", other: "Other",
+};
+
+/**
+ * Extract token creation fields from a natural language message.
+ * Runs server-side so the frontend gets structured data even if
+ * the LLM doesn't return extracted_fields in its response.
+ */
+function extractTokenFields(
+  message: string,
+  currentForm?: Record<string, unknown>,
+): TokenFields {
+  const fields: TokenFields = {};
+  const text = message;
+  const lower = message.toLowerCase();
+
+  // ── Symbol ────────────────────────────────────────────────
+  // "symbol VIBE", "ticker TEST", "symbol is ABC"
+  const symbolMatch = text.match(
+    /\b(?:symbol|ticker)\s+(?:is\s+|=\s+|should\s+be\s+|will\s+be\s+|as\s+)?([A-Za-z][A-Za-z0-9]{0,9})\b/i
+  );
+  if (symbolMatch) {
+    fields.symbol = symbolMatch[1].toUpperCase();
+  }
+
+  // ── Name ──────────────────────────────────────────────────
+  // "called Vibe Token", "named Cool Coin", "token name is ..."
+  const nameMatch = text.match(
+    /\b(?:called|named|name(?:\s+is)?)\s+([A-Za-z][A-Za-z0-9 _-]{0,62}?)(?=\s+(?:with|symbol|ticker|supply|decimals?|and)\b|[.,!?]|$)/i
+  );
+  if (nameMatch) {
+    fields.name = nameMatch[1].trim();
+  }
+
+  // ── Supply ────────────────────────────────────────────────
+  // "10 million supply", "supply of 1000000", "mint 5000", "with 1m supply"
+  // Handle "million", "billion", "k" suffixes
+  const supplyPatterns = [
+    /\b(?:initial\s+)?supply\s+(?:of\s+|is\s+|=\s+)?(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\b/i,
+    /\b(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\s+(?:initial\s+)?supply\b/i,
+    /\bmint\s+(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\b/i,
+    /\bwith\s+(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\s+(?:tokens?|supply|coins?)?\b/i,
+  ];
+  for (const pattern of supplyPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      let val = parseFloat(match[1]);
+      const suffix = (match[2] || "").toLowerCase();
+      if (suffix.startsWith("m")) val *= 1_000_000;
+      else if (suffix.startsWith("b")) val *= 1_000_000_000;
+      else if (suffix === "k" || suffix === "thousand") val *= 1_000;
+      fields.initialSupply = String(Math.round(val));
+      break;
+    }
+  }
+
+  // ── Decimals ──────────────────────────────────────────────
+  const decimalsMatch = text.match(
+    /\bdecimals?\s+(?:is\s+|are\s+|=\s+|should\s+be\s+)?(\d{1,2})\b/i
+  );
+  if (decimalsMatch) {
+    const d = parseInt(decimalsMatch[1]);
+    if ([0, 2, 6, 8, 18].includes(d)) {
+      fields.decimals = d;
+    }
+  }
+
+  // ── Category ──────────────────────────────────────────────
+  // Check for category keywords in the message
+  const categoryPatterns: [RegExp, string][] = [
+    [/\b(?:meme|meme\s*coin|shitcoin|degen)\b/i, "meme"],
+    [/\b(?:governance|voting|dao)\b/i, "governance"],
+    [/\b(?:stablecoin|stable\s*coin|pegged)\b/i, "stablecoin"],
+    [/\b(?:community|social|fan)\b/i, "community"],
+    [/\b(?:gaming|game|in-game|play-to-earn|p2e)\b/i, "gaming"],
+    [/\b(?:utility|service|platform)\b/i, "utility"],
+    [/\b(?:impact|charity|climate|social\s+good|donation)\b/i, "impact"],
+    [/\b(?:rwa|real[\s-]*world[\s-]*asset)\b/i, "rwa"],
+  ];
+  for (const [pattern, cat] of categoryPatterns) {
+    if (pattern.test(text)) {
+      fields.category = CATEGORY_DISPLAY[cat] || cat;
+      break;
+    }
+  }
+  // Also check "category is X"
+  const catExplicit = text.match(
+    /\bcategory\s+(?:is\s+|=\s+|should\s+be\s+)?(\w+)\b/i
+  );
+  if (catExplicit && VALID_CATEGORIES.has(catExplicit[1].toLowerCase())) {
+    fields.category = CATEGORY_DISPLAY[catExplicit[1].toLowerCase()];
+  }
+
+  // ── Burn rate ─────────────────────────────────────────────
+  const burnMatch = text.match(
+    /\b(?:burn\s*(?:rate)?)\s+(?:of\s+|is\s+|=\s+)?(\d+(?:\.\d+)?)\s*(%|percent|bps|basis)?\b/i
+  );
+  if (burnMatch) {
+    let val = parseFloat(burnMatch[1]);
+    const unit = (burnMatch[2] || "").toLowerCase();
+    // Convert percentage to basis points if needed
+    if (unit === "%" || unit === "percent") val = Math.round(val * 100);
+    fields.burnRate = String(Math.round(val));
+  }
+
+  // ── Echo / charity rate ───────────────────────────────────
+  const echoMatch = text.match(
+    /\b(?:echo|charity)\s*(?:rate)?\s+(?:of\s+|is\s+|=\s+)?(\d+(?:\.\d+)?)\s*(%|percent|bps|basis)?\b/i
+  );
+  if (echoMatch) {
+    let val = parseFloat(echoMatch[1]);
+    const unit = (echoMatch[2] || "").toLowerCase();
+    if (unit === "%" || unit === "percent") val = Math.round(val * 100);
+    fields.echoRate = String(Math.round(val));
+  }
+
+  // ── Infer symbol from name if not explicit ────────────────
+  if (!fields.symbol && fields.name && !currentForm?.symbol) {
+    // If name is short enough and all caps, treat as symbol
+    const nameUpper = fields.name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (nameUpper.length <= 10 && fields.name === fields.name.toUpperCase()) {
+      fields.symbol = nameUpper;
+    }
+  }
+
+  // ── Description from "for ..." or "to ..." clauses ───────
+  const descMatch = text.match(
+    /\bfor\s+((?:rewarding|tracking|powering|funding|supporting|building|creating|managing|enabling)\s+[^.!?]{10,150})/i
+  );
+  if (descMatch) {
+    fields.description = descMatch[1].trim();
+  }
+
+  return fields;
 }

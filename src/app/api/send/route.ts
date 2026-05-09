@@ -22,6 +22,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
+import { requireSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -51,6 +52,10 @@ type SendRequest = {
 };
 
 export async function POST(request: Request) {
+  // ── Session auth ────────────────────────────────────────────
+  const authFailed = requireSession(request);
+  if (authFailed) return authFailed;
+
   // ── Rate limit ──────────────────────────────────────────────
   const clientKey = getClientKey(request);
   const limited = checkRateLimit("send", clientKey, RATE_LIMIT);
@@ -198,11 +203,12 @@ function runListKeys(passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
-    if (passphrase) args.push("--passphrase", passphrase);
+    // SECURITY: Pass passphrase via stdin to avoid ps visibility
+    if (passphrase) args.push("--passphrase-stdin");
     args.push("--json", "list-keys");
 
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
@@ -211,9 +217,15 @@ function runListKeys(passphrase?: string): Promise<string> {
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    // Write passphrase to stdin if provided
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
 
     let stdout = "";
     child.stdout.setEncoding("utf8");
@@ -254,12 +266,13 @@ function runSend(
 
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
-    if (passphrase) args.push("--passphrase", passphrase);
+    // SECURITY: Pass passphrase via stdin to avoid ps visibility
+    if (passphrase) args.push("--passphrase-stdin");
     args.push("send", String(amount), "--to-pk-x", toPkX, "--to-pk-y", toPkY);
     if (assetId !== "1") args.push("--asset-id", assetId);
 
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
@@ -268,9 +281,15 @@ function runSend(
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    // Write passphrase to stdin if provided
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";

@@ -9,6 +9,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
+import { requireSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -36,6 +37,10 @@ let activeDispenses = 0;
 const ADDRESS_PATTERN = /^[0-9a-fA-F]{64}$/;
 
 export async function POST(request: Request) {
+  // ── Session auth ────────────────────────────────────────────
+  const authFailed = requireSession(request);
+  if (authFailed) return authFailed;
+
   // ── Rate limit by IP ────────────────────────────────────────
   const clientKey = getClientKey(request);
   const ipLimited = checkRateLimit("faucet-ip", clientKey, IP_RATE_LIMIT);
@@ -96,9 +101,7 @@ export async function POST(request: Request) {
   let displayAddr = address.slice(0, 8) + "..." + address.slice(-8);
   try {
     const keysOutput = await runWalletCommand(["--json", "list-keys"]);
-    if (process.env.NODE_ENV !== "production") {
-      console.log("[faucet] list-keys output:", keysOutput.slice(0, 500));
-    }
+    // SECURITY: Never log list-keys output — it contains spending_sk
     const keysResult = JSON.parse(keysOutput);
     if (keysResult.keys && keysResult.keys.length > 0) {
       const key = keysResult.keys[0];
@@ -112,7 +115,7 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     if (process.env.NODE_ENV !== "production") {
-      console.error("[faucet] list-keys failed:", err instanceof Error ? err.message.slice(0, 300) : err);
+      console.error("[faucet] list-keys failed (details redacted)");
     }
   }
 
@@ -178,7 +181,7 @@ function runWalletCommand(extraArgs: string[]): Promise<string> {
     args.push(...extraArgs);
 
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
@@ -223,13 +226,15 @@ function runFaucet(toSk: string, amount: string): Promise<string> {
 
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
-    args.push("faucet", "--to-sk", toSk, "--amount", amount, "--no-limit");
+    args.push("faucet", "--to-sk-env", "TONKL_FAUCET_SK", "--amount", amount, "--no-limit");
 
+    // SECURITY: Pass spending key via env var, not CLI arg (CLI args are visible in ps)
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
+      TONKL_FAUCET_SK: toSk,
     };
     if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
 

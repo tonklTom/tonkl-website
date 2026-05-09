@@ -302,7 +302,7 @@ function runWalletCommand(command: string): Promise<string> {
     // SECURITY: Only pass the minimum required environment variables.
     // Never spread ...process.env — it would leak secrets, API keys, etc.
     const safeEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH || "/usr/bin:/usr/local/bin",
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,

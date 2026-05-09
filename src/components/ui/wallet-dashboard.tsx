@@ -20,9 +20,9 @@ import {
   Eye,
   EyeOff,
   Droplet,
+  Coins,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { Warp } from "@paper-design/shaders-react";
 import * as Avatar from "@radix-ui/react-avatar";
 import { useTonkl } from "@/hooks/use-obscura";
 
@@ -79,26 +79,12 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
         ========================================
       */}
       <div className="relative w-full pt-8 pb-12 overflow-hidden border-b border-white/5">
-        {/* Animated Shader Background */}
-        <div className="absolute inset-0 z-0 pointer-events-none">
-          <Warp
-            style={{ height: "100%", width: "100%" }}
-            proportion={0.5}
-            softness={1}
-            distortion={0.3}
-            swirl={1.2}
-            swirlIterations={10}
-            shape="checks"
-            shapeScale={0.1}
-            scale={1.5}
-            rotation={0}
-            speed={1}
-            colors={[
-              "hsl(220, 100%, 12%)",
-              "hsl(180, 100%, 18%)",
-              "hsl(200, 80%, 8%)",
-              "hsl(190, 90%, 22%)",
-            ]}
+        {/* Static Image Background */}
+        <div className="absolute inset-0 z-0 bg-black pointer-events-none">
+          <img 
+            src="/dark_ethereal_bg.png" 
+            alt="Tonkl Background"
+            className="w-full h-full object-cover opacity-80" 
           />
         </div>
 
@@ -235,27 +221,34 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* Action Buttons Grid */}
-          <div className="grid grid-cols-3 gap-4 md:gap-6 w-full max-w-2xl">
-            <button 
+          <div className="grid grid-cols-4 gap-4 md:gap-6 w-full max-w-2xl">
+            <button
               onClick={() => window.location.hash = "#send"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
               <ArrowUpRight className="w-8 h-8 text-cyan-400 group-hover:scale-110 transition-transform" />
               <span className="font-medium text-white/90">Send</span>
             </button>
-            <button 
+            <button
               onClick={() => window.location.hash = "#receive"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
               <ArrowDownLeft className="w-8 h-8 text-emerald-400 group-hover:scale-110 transition-transform" />
               <span className="font-medium text-white/90">Receive</span>
             </button>
-            <button 
+            <button
               onClick={() => window.location.hash = "#faucet"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
               <Droplet className="w-8 h-8 text-yellow-400 group-hover:scale-110 transition-transform" />
               <span className="font-medium text-white/90">Faucet</span>
+            </button>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('open-shlem'))}
+              className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
+            >
+              <Coins className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform" />
+              <span className="font-medium text-white/90 text-center text-sm">Create Token</span>
             </button>
           </div>
         </div>
@@ -477,14 +470,7 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {/* Floating Ask Shlem Button */}
-      <button
-        onClick={() => window.dispatchEvent(new CustomEvent("open-shlem"))}
-        className="fixed bottom-6 right-6 md:bottom-8 md:right-8 flex items-center gap-3 bg-[#0a0a0a] border border-cyan-400/50 hover:border-cyan-400 px-6 py-4 rounded-full text-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.15)] hover:shadow-[0_0_30px_rgba(34,211,238,0.3)] transition-all hover:scale-105 group z-50"
-      >
-        <MessageCircle className="w-5 h-5" />
-        <span className="font-medium tracking-wide">Ask Shlem</span>
-      </button>
+
     </motion.div>
   );
 }
