@@ -101,11 +101,6 @@ export function useTonkl(): TonklState {
   return { connected, loading, chain, wallet, error, lastUpdated, refresh };
 }
 
-// ─── Backwards compatibility export ──────────────────────────────
-
-export { useTonkl as useObscura };
-export type { TonklState as ObscuraState };
-
 // ─── RPC Helper ──────────────────────────────────────────────────
 
 export async function nodeRpc(

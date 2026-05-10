@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import * as Avatar from "@radix-ui/react-avatar";
-import { useTonkl } from "@/hooks/use-obscura";
+import { useTonkl } from "@/hooks/use-tonkl";
 
 export function WalletDashboard({ onClose }: { onClose: () => void }) {
   const { connected, loading, chain, wallet, error, lastUpdated, refresh } =

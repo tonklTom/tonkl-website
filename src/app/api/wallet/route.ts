@@ -23,10 +23,10 @@ import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
-const NODE_URL = process.env.TONKL_NODE_URL || process.env.OBSCURA_NODE_URL || "http://127.0.0.1:9100";
-const WALLET_SCRIPT = process.env.TONKL_WALLET_SCRIPT || process.env.OBSCURA_WALLET_SCRIPT || "";
-const WALLET_DB = process.env.TONKL_WALLET_DB || process.env.OBSCURA_WALLET_DB || "";
-const PYTHON = process.env.TONKL_PYTHON || process.env.OBSCURA_PYTHON || "python3";
+const NODE_URL = process.env.TONKL_NODE_URL || "http://127.0.0.1:9100";
+const WALLET_SCRIPT = process.env.TONKL_WALLET_SCRIPT || "";
+const WALLET_DB = process.env.TONKL_WALLET_DB || "";
+const PYTHON = process.env.TONKL_PYTHON || "python3";
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_BODY_SIZE = 2 * 1024; // 2 KB
 const MAX_STDOUT_SIZE = 512 * 1024; // 512 KB — cap stdout to prevent OOM

@@ -14,13 +14,13 @@ import { requireSession } from "@/lib/session";
 export const runtime = "nodejs";
 
 const NODE_URL =
-  process.env.TONKL_NODE_URL || process.env.OBSCURA_NODE_URL || "http://127.0.0.1:9100";
+  process.env.TONKL_NODE_URL || "http://127.0.0.1:9100";
 const WALLET_SCRIPT =
-  process.env.TONKL_WALLET_SCRIPT || process.env.OBSCURA_WALLET_SCRIPT || "";
+  process.env.TONKL_WALLET_SCRIPT || "";
 const PYTHON =
-  process.env.TONKL_PYTHON || process.env.OBSCURA_PYTHON || "python3";
+  process.env.TONKL_PYTHON || "python3";
 const WALLET_DB =
-  process.env.TONKL_WALLET_DB || process.env.OBSCURA_WALLET_DB || "";
+  process.env.TONKL_WALLET_DB || "";
 const FAUCET_AMOUNT = process.env.FAUCET_AMOUNT || "100";
 const REQUEST_TIMEOUT_MS = 120_000; // Faucet TX takes longer (ZK proving)
 

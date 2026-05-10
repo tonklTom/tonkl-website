@@ -234,7 +234,7 @@ function runShlem(message: string, history: ShlemHistoryTurn[], context?: string
   const nodeUrl = (
     process.env.SHLEM_NODE_URL
     || process.env.TONKL_NODE_URL
-    || process.env.OBSCURA_NODE_URL
+   
     || DEFAULT_NODE_URL
   );
   const walletCmd = buildWalletCommand(nodeUrl);
@@ -424,19 +424,19 @@ function buildWalletCommand(nodeUrl: string): string | undefined {
     return process.env.SHLEM_WALLET_CMD;
   }
 
-  const walletScript = process.env.TONKL_WALLET_SCRIPT || process.env.OBSCURA_WALLET_SCRIPT;
+  const walletScript = process.env.TONKL_WALLET_SCRIPT;
   if (!walletScript) {
     return undefined;
   }
 
   const command = [
-    process.env.TONKL_PYTHON || process.env.OBSCURA_PYTHON || "python3",
+    process.env.TONKL_PYTHON || "python3",
     walletScript,
     "--node-url",
     nodeUrl,
     "--json",
   ];
-  const walletDb = process.env.TONKL_WALLET_DB || process.env.OBSCURA_WALLET_DB;
+  const walletDb = process.env.TONKL_WALLET_DB;
   if (walletDb) {
     command.push("--db", walletDb);
   }
