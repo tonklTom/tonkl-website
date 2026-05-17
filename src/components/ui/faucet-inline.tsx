@@ -3,28 +3,26 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Droplet, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { tonklSessionHeaders } from "@/lib/client-session";
 
 type FaucetStatus = "idle" | "loading-address" | "ready" | "dripping" | "success" | "error";
+type PrepareStatus = "idle" | "preparing" | "success";
 
 export function FaucetInline({ onBack }: { onBack: () => void }) {
-  const [status, setStatus] = useState<FaucetStatus>("idle");
+  const [status, setStatus] = useState<FaucetStatus>("loading-address");
   const [address, setAddress] = useState("");
   const [manualAddress, setManualAddress] = useState("");
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  const [prepareStatus, setPrepareStatus] = useState<PrepareStatus>("idle");
+  const [prepareMsg, setPrepareMsg] = useState("");
 
-  // Auto-load user's address on mount
-  useEffect(() => {
-    loadAddress();
-  }, []);
-
-  const loadAddress = async () => {
-    setStatus("loading-address");
+  async function loadAddress() {
     try {
       const resp = await fetch("/api/wallet", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "list-keys" }),
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
+        body: JSON.stringify({ command: "address" }),
       });
       const data = await resp.json();
       const output = data.output || "";
@@ -33,8 +31,8 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
       // Try JSON
       try {
         const parsed = JSON.parse(output);
-        if (parsed.keys && parsed.keys.length > 0) {
-          addr = parsed.keys[0].pk_x;
+        if (parsed.addresses && parsed.addresses.length > 0) {
+          addr = parsed.addresses[0].pk_x;
         }
       } catch {
         // Try text parsing
@@ -49,7 +47,15 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
       // Not critical — user can enter manually
     }
     setStatus("ready");
-  };
+  }
+
+  // Auto-load user's address on mount
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAddress();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const handleDrip = async () => {
     const targetAddr = (address || manualAddress).replace(/^0x/, "").trim();
@@ -65,7 +71,7 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
     try {
       const resp = await fetch("/api/faucet", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({ address: targetAddr }),
       });
 
@@ -79,10 +85,37 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
       }
 
       setSuccessMsg(data.message || "Tokens sent!");
+      setPrepareStatus("idle");
+      setPrepareMsg("");
       setStatus("success");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Faucet request failed");
       setStatus("error");
+    }
+  };
+
+  const handlePrepareSpendable = async () => {
+    setError("");
+    setPrepareStatus("preparing");
+    setPrepareMsg("");
+
+    try {
+      const resp = await fetch("/api/prepare-spendable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
+        body: JSON.stringify({ assetId: "1" }),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok || !data.success) {
+        throw new Error(data.message || "Could not prepare wallet notes.");
+      }
+
+      setPrepareStatus("success");
+      setPrepareMsg(data.message || "Wallet is ready for sending.");
+    } catch (err) {
+      setPrepareStatus("idle");
+      setError(err instanceof Error ? err.message : "Could not prepare wallet notes.");
     }
   };
 
@@ -126,6 +159,41 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
             </motion.div>
             <h2 className="text-2xl font-medium text-white mb-2">Tokens Sent!</h2>
             <p className="text-white/60 text-sm mb-8">{successMsg}</p>
+            <div className="w-full bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-4 mb-6">
+              <div className="flex items-start gap-3">
+                {prepareStatus === "success" ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : prepareStatus === "preparing" ? (
+                  <Loader2 className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5 animate-spin" />
+                ) : (
+                  <Droplet className="w-5 h-5 text-cyan-300 shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-white text-sm font-medium">
+                    {prepareStatus === "success" ? "Ready to send" : "One more step before sending"}
+                  </p>
+                  <p className="text-white/55 text-sm mt-1">
+                    {prepareMsg || "Prepare notes so the shielded transfer circuit has the padding it needs. Your balance stays the same."}
+                  </p>
+                  {prepareStatus !== "success" && (
+                    <button
+                      onClick={handlePrepareSpendable}
+                      disabled={prepareStatus === "preparing"}
+                      className="mt-4 px-4 py-2 bg-cyan-500 disabled:bg-cyan-500/30 text-black disabled:text-white/40 rounded-lg text-sm font-medium hover:bg-cyan-400 transition-colors inline-flex items-center gap-2"
+                    >
+                      {prepareStatus === "preparing" && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {prepareStatus === "preparing" ? "Preparing..." : "Prepare Notes"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {error && (
+              <div className="w-full p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm flex items-center gap-2 mb-6">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                {error}
+              </div>
+            )}
             <div className="flex gap-4 w-full">
               <button
                 onClick={onBack}
@@ -134,7 +202,7 @@ export function FaucetInline({ onBack }: { onBack: () => void }) {
                 Back to Dashboard
               </button>
               <button
-                onClick={() => { setStatus("ready"); setSuccessMsg(""); }}
+                onClick={() => { setStatus("ready"); setSuccessMsg(""); setPrepareStatus("idle"); setPrepareMsg(""); }}
                 className="flex-1 py-4 bg-white/5 text-white/70 font-medium rounded-xl hover:bg-white/10 transition-colors"
               >
                 Request More

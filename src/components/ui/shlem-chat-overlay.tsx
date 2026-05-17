@@ -10,6 +10,8 @@ import {
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import SiriOrb from "@/components/ui/siri-orb";
 import { GooeyFilter } from "@/components/ui/gooey-filter";
+import { tonklSessionHeaders } from "@/lib/client-session";
+import { maskSecretText } from "@/lib/secret-mask";
 
 // ─── Rich message types ────────────────────────────────────────
 
@@ -126,12 +128,13 @@ const DEFAULT_FORM: TokenFormData = {
 // ─── Component ─────────────────────────────────────────────────
 
 interface ShlemChatOverlayProps {
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
+  embedded?: boolean;
 }
 
-export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
-  const [isFullscreen, setIsFullscreen] = useState(true);
+export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemChatOverlayProps) {
+  const [isFullscreen, setIsFullscreen] = useState(embedded ? true : true);
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isShlemSpeaking, setIsShlemSpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -212,7 +215,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
     try {
       const resp = await fetch("/api/token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({
           action: "create",
           symbol: form.symbol.toUpperCase(),
@@ -282,6 +285,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
   const handleSend = async (text: string) => {
     const trimmedText = text.trim();
     if (!trimmedText || isLoading) return;
+    const visibleText = maskSecretText(trimmedText).text;
 
     const history = messages
       .filter((m) => m.id !== "welcome" && m.kind !== "token_creating")
@@ -290,7 +294,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
 
     setMessages((prev) => [
       ...prev,
-      { id: createMessageId(), text: trimmedText, isUser: true },
+      { id: createMessageId(), text: visibleText, isUser: true },
     ]);
     setIsLoading(true);
 
@@ -298,7 +302,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
       const context = isTokenContext(trimmedText) ? "token_creation" : undefined;
       const response = await fetch("/api/shlem", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({
           message: trimmedText,
           history,
@@ -308,7 +312,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
       });
 
       const data = (await response.json().catch(() => null)) as ShlemApiResponse | null;
-      const reply = data?.reply || "I could not read the Shlem response.";
+      const reply = maskSecretText(data?.reply || "I could not read the Shlem response.").text;
 
       const extracted = data?.payload?.execution?.data?.extracted_fields;
       if (extracted && Object.keys(extracted).length > 0) {
@@ -382,34 +386,11 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
 
   // ─── RENDER ──────────────────────────────────────────────
 
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          {isFullscreen && (
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              className="fixed inset-y-0 right-0 left-20 z-[40] bg-[#020202] overflow-hidden"
-              onClick={onClose}
-            >
-              <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_bottom_right,_var(--tw-gradient-stops))] from-cyan-500/30 via-transparent to-transparent pointer-events-none" />
-            </motion.div>
-          )}
-
-          <motion.div
-            initial={isFullscreen ? { opacity: 0, scale: 0.95, y: 20 } : { opacity: 0, y: 20, scale: 0.9 }}
-            animate={isFullscreen ? { opacity: 1, scale: 1, y: 0 } : { opacity: 1, y: 0, scale: 1 }}
-            exit={isFullscreen ? { opacity: 0, scale: 0.95, y: 20 } : { opacity: 0, y: 20, scale: 0.9 }}
-            transition={{ duration: 0.3, ease: "easeOut" }}
-            className={`fixed z-[50] flex flex-col overflow-hidden transition-all duration-500 ease-in-out ${
-              isFullscreen
-                ? "inset-y-4 right-4 left-24 md:inset-y-12 md:right-12 md:left-[8.5rem] lg:inset-y-12 lg:right-32 lg:left-52 bg-transparent"
-                : "bottom-6 right-6 w-[380px] h-[600px] bg-[#0a0a0a]/95 backdrop-blur-2xl rounded-2xl border border-cyan-500/20 shadow-[0_0_40px_rgba(34,211,238,0.15)]"
-            }`}
-          >
+  const chatContent = (
+    <>
             {/* Header */}
-            <div className={`flex items-center justify-end p-4 ${!isFullscreen && "border-b border-white/10"}`}>
+            {!embedded && (
+              <div className={`flex items-center justify-end p-4 ${!isFullscreen && "border-b border-white/10"}`}>
               <div className="flex items-center gap-2">
                 <button onClick={() => setIsFullscreen(!isFullscreen)} className="p-2 text-gray-400 hover:text-cyan-400 hover:bg-cyan-400/10 rounded-lg transition-colors">
                   {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-4 h-4" />}
@@ -419,6 +400,7 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
                 </button>
               </div>
             </div>
+            )}
 
             {/* Messages */}
             <GooeyFilter id="chat-gooey-filter" strength={3} />
@@ -431,9 +413,12 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
                 >
                   {messages.map((msg) => (
                     <motion.div
-                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      initial={{ opacity: 0, y: 15, scale: 0.85 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      transition={{ type: "spring", stiffness: 200, damping: 22, mass: 1.2 }}
                       key={msg.id}
                       className={`flex ${msg.isUser ? "justify-end" : "justify-start"}`}
+                      style={{ transformOrigin: msg.isUser ? "bottom right" : "bottom left" }}
                     >
                       {msg.isUser ? (
                         <div className="max-w-[80%] rounded-[24px] rounded-br-sm px-5 py-3.5 bg-[#111111] text-white/95 border border-white/5 shadow-md">
@@ -534,6 +519,44 @@ export function ShlemChatOverlay({ isOpen, onClose }: ShlemChatOverlayProps) {
                 </motion.div>
               )}
             </AnimatePresence>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="w-full h-full flex flex-col">
+        {chatContent}
+      </div>
+    );
+  }
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <>
+          {isFullscreen && (
+            <motion.div
+              initial={{ opacity: 1, y: "100vh" }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 1, y: "100vh" }}
+              transition={{ duration: 0.6, ease: [0.32, 0.72, 0, 1] }}
+              className="fixed inset-y-0 right-0 left-20 z-[40] bg-[#020202] overflow-hidden"
+              onClick={onClose}
+            >
+              <div className="absolute inset-0 z-0 bg-[radial-gradient(ellipse_at_bottom_right,_var(--tw-gradient-stops))] from-cyan-500/30 via-transparent to-transparent pointer-events-none" />
+            </motion.div>
+          )}
+
+          <motion.div
+            initial={isFullscreen ? { opacity: 1, y: "100vh" } : { opacity: 0, y: 20, scale: 0.9 }}
+            animate={isFullscreen ? { opacity: 1, y: 0 } : { opacity: 1, y: 0, scale: 1 }}
+            exit={isFullscreen ? { opacity: 1, y: "100vh" } : { opacity: 0, y: 20, scale: 0.9 }}
+            transition={isFullscreen ? { duration: 0.6, ease: [0.32, 0.72, 0, 1] } : { duration: 0.3, ease: "easeOut" }}
+            className={`fixed z-[50] flex flex-col overflow-hidden transition-all duration-500 ease-in-out ${
+              isFullscreen
+                ? "inset-y-4 right-4 left-24 md:inset-y-12 md:right-12 md:left-[8.5rem] lg:inset-y-12 lg:right-32 lg:left-52 bg-transparent"
+                : "bottom-6 right-6 w-[380px] h-[600px] bg-[#0a0a0a]/95 backdrop-blur-2xl rounded-2xl border border-cyan-500/20 shadow-[0_0_40px_rgba(34,211,238,0.15)]"
+            }`}
+          >
+            {chatContent}
           </motion.div>
         </>
       )}

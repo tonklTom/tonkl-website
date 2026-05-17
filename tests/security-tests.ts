@@ -17,7 +17,7 @@ const BASE_URL = process.env.BASE_URL || "http://localhost:3001";
 
 let passed = 0;
 let failed = 0;
-let skipped = 0;
+const skipped = 0;
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -160,96 +160,86 @@ async function testNodeRoute() {
 async function testWalletRoute() {
   console.log("\n── /api/wallet ────────────────────────────────────");
 
-  await test("GET returns wallet data structure", async () => {
+  await test("GET without session returns 401", async () => {
     const resp = await getJson("/api/wallet");
-    const data = await resp.json();
-    assert(resp.ok, `Expected 200, got ${resp.status}`);
-    assert("connected" in data, "Must have connected field");
-    assert("chain" in data, "Must have chain field");
-    assert("wallet" in data, "Must have wallet field");
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("GET does NOT leak file paths", async () => {
+  await test("GET without session does NOT leak file paths", async () => {
     const resp = await getJson("/api/wallet");
     const text = await resp.text();
     assert(!text.includes("/Users/"), "Must not contain /Users/ path");
     assert(!text.includes("/opt/"), "Must not contain /opt/ path");
     assert(!text.includes("obscura_wallet.py"), "Must not contain script name");
+    assert(!text.includes("tonkl_wallet.py"), "Must not contain script name");
   });
 
-  await test("POST with valid command returns data or error", async () => {
+  await test("POST with valid command but no session returns 401", async () => {
     const resp = await postJson("/api/wallet", { command: "balance" });
-    // Wallet might not be configured (503) or command might fail (500) — both valid
-    assert(
-      [200, 500, 503].includes(resp.status),
-      `Expected 200/500/503, got ${resp.status}`
-    );
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with invalid command returns 403", async () => {
+  await test("POST with invalid command and no session returns 401", async () => {
     const resp = await postJson("/api/wallet", { command: "send" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("BLOCKED: send command not allowed", async () => {
+  await test("BLOCKED before validation: send command needs session", async () => {
     const resp = await postJson("/api/wallet", { command: "send" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("BLOCKED: transfer command not allowed", async () => {
+  await test("BLOCKED before validation: transfer command needs session", async () => {
     const resp = await postJson("/api/wallet", { command: "transfer" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("BLOCKED: mint command not allowed", async () => {
+  await test("BLOCKED before validation: mint command needs session", async () => {
     const resp = await postJson("/api/wallet", { command: "mint" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("BLOCKED: shell injection attempt", async () => {
+  await test("BLOCKED before validation: shell injection attempt needs session", async () => {
     const resp = await postJson("/api/wallet", { command: "balance; rm -rf /" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("BLOCKED: pipe injection attempt", async () => {
+  await test("BLOCKED before validation: pipe injection attempt needs session", async () => {
     const resp = await postJson("/api/wallet", { command: "balance | cat /etc/passwd" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("Blocked command error does NOT echo command", async () => {
+  await test("Unauthenticated command error does NOT echo command", async () => {
     const resp = await postJson("/api/wallet", { command: "evil_cmd_12345" });
     const text = await resp.text();
     assert(!text.includes("evil_cmd_12345"), "Error must not echo the attempted command");
   });
 
-  await test("Invalid JSON returns 400", async () => {
+  await test("Invalid JSON without session returns 401", async () => {
     const resp = await fetch(`${BASE_URL}/api/wallet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{bad json",
     });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("Empty command returns 403", async () => {
+  await test("Empty command without session returns 401", async () => {
     const resp = await postJson("/api/wallet", { command: "" });
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("Missing command field returns 403", async () => {
+  await test("Missing command field without session returns 401", async () => {
     const resp = await postJson("/api/wallet", {});
-    assert(resp.status === 403, `Expected 403, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("500 error does NOT leak stderr/paths", async () => {
-    // Even if a command fails, the error should be generic
+  await test("Unauthenticated wallet response does NOT leak stderr/paths", async () => {
     const resp = await postJson("/api/wallet", { command: "balance" });
-    if (resp.status === 500) {
-      const text = await resp.text();
-      assert(!text.includes("/Users/"), "500 must not contain file paths");
-      assert(!text.includes("Traceback"), "500 must not contain Python tracebacks");
-      assert(!text.includes(".py"), "500 must not contain script filenames");
-    }
+    const text = await resp.text();
+    assert(!text.includes("/Users/"), "Response must not contain file paths");
+    assert(!text.includes("Traceback"), "Response must not contain Python tracebacks");
+    assert(!text.includes(".py"), "Response must not contain script filenames");
   });
 }
 
@@ -266,53 +256,79 @@ async function testFaucetRoute() {
     assert("limits" in data, "Must have limits info");
   });
 
-  await test("POST with missing address returns 400", async () => {
+  await test("POST without session and missing address returns 401", async () => {
     const resp = await postJson("/api/faucet", {});
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with empty address returns 400", async () => {
+  await test("POST without session and empty address returns 401", async () => {
     const resp = await postJson("/api/faucet", { address: "" });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with invalid address (too short) returns 400", async () => {
+  await test("POST without session and short address returns 401", async () => {
     const resp = await postJson("/api/faucet", { address: "abc123" });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with invalid address (non-hex) returns 400", async () => {
+  await test("POST without session and non-hex address returns 401", async () => {
     const resp = await postJson("/api/faucet", {
       address: "g".repeat(64), // 'g' is not hex
     });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with injection in address returns 400", async () => {
+  await test("POST without session and injection address returns 401", async () => {
     const resp = await postJson("/api/faucet", {
       address: "a".repeat(60) + "; rm",
     });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("POST with valid hex address format accepted", async () => {
+  await test("POST without session and valid address returns 401", async () => {
     const validAddr = "a".repeat(64);
     const resp = await postJson("/api/faucet", { address: validAddr });
-    // Should be 200 (success), 500 (faucet failed), or 503 (not configured)
-    // NOT 400 (address should pass validation)
-    assert(
-      [200, 500, 503].includes(resp.status),
-      `Expected 200/500/503, got ${resp.status}`
-    );
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
   });
 
-  await test("Invalid JSON returns 400", async () => {
+  await test("Invalid JSON without session returns 401", async () => {
     const resp = await fetch(`${BASE_URL}/api/faucet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "not json",
     });
-    assert(resp.status === 400, `Expected 400, got ${resp.status}`);
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
+  });
+}
+
+// ─── Prepare Spendable Route Tests ─────────────────────────────
+
+async function testPrepareSpendableRoute() {
+  console.log("\n── /api/prepare-spendable ─────────────────────────");
+
+  await test("POST without session returns 401", async () => {
+    const resp = await postJson("/api/prepare-spendable", { assetId: "1" });
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
+  });
+
+  await test("Invalid JSON without session returns 401", async () => {
+    const resp = await fetch(`${BASE_URL}/api/prepare-spendable`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not json",
+    });
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
+  });
+
+  await test("Unauthenticated response does NOT leak wallet details", async () => {
+    const resp = await postJson("/api/prepare-spendable", {
+      assetId: "1; cat /etc/passwd",
+    });
+    const text = await resp.text();
+    assert(resp.status === 401, `Expected 401, got ${resp.status}`);
+    assert(!text.includes("/Users/"), "Response must not contain file paths");
+    assert(!text.includes("tonkl_wallet.py"), "Response must not contain script name");
+    assert(!text.includes("passwd"), "Response must not echo attempted input");
   });
 }
 
@@ -391,6 +407,7 @@ async function main() {
   await testNodeRoute();
   await testWalletRoute();
   await testFaucetRoute();
+  await testPrepareSpendableRoute();
   await testSecurityHeaders();
   await testRateLimiting();
 

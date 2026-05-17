@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Copy, Check, Loader2, QrCode } from "lucide-react";
+import { tonklSessionHeaders } from "@/lib/client-session";
 
 export function Receive({ onBack }: { onBack: () => void }) {
   const [address, setAddress] = useState("");
@@ -10,19 +11,12 @@ export function Receive({ onBack }: { onBack: () => void }) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    fetchAddress();
-  }, []);
-
-  const fetchAddress = async () => {
-    setLoading(true);
-    setError("");
-
+  async function fetchAddress() {
     try {
       const resp = await fetch("/api/wallet", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "list-keys" }),
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
+        body: JSON.stringify({ command: "address" }),
       });
 
       const data = await resp.json();
@@ -31,17 +25,15 @@ export function Receive({ onBack }: { onBack: () => void }) {
         throw new Error(data.message || "Failed to fetch address");
       }
 
-      // Parse the output to extract pk_x address
-      // The --json output gives { keys: [{ pk_x: "0x..." }] }
-      // The text output has lines like "Address (pk_x): 0x..."
+      // Parse the safe address response. It contains public keys only.
       const output = data.output || "";
       let addr = "";
 
       // Try JSON parse first
       try {
         const parsed = JSON.parse(output);
-        if (parsed.keys && parsed.keys.length > 0) {
-          addr = parsed.keys[0].pk_x;
+        if (parsed.addresses && parsed.addresses.length > 0) {
+          addr = parsed.addresses[0].pk_x;
         }
       } catch {
         // Fall back to text parsing
@@ -65,7 +57,14 @@ export function Receive({ onBack }: { onBack: () => void }) {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchAddress();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const handleCopy = async () => {
     if (!address) return;
@@ -155,7 +154,7 @@ export function Receive({ onBack }: { onBack: () => void }) {
             {/* Info */}
             <div className="text-center text-white/30 text-sm space-y-1">
               <p>Send this address to the person paying you.</p>
-              <p>They can use it as the <span className="font-mono text-white/40">--to-sk</span> parameter or paste it in the Send page.</p>
+              <p>They can paste it into the Send page as your recipient public address.</p>
             </div>
           </div>
         )}

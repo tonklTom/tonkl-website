@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
+import { validateSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -136,7 +137,13 @@ export async function POST(request: Request) {
       : undefined;
     const currentForm = (body as { currentForm?: unknown }).currentForm as Record<string, unknown> | undefined;
     const history = parseHistory((body as { history?: unknown }).history);
-    const payload = await runShlem(message, history, context);
+    const session = validateSession(request);
+
+    if (!session && requiresWalletSession(message, context)) {
+      return Response.json(buildWalletSessionRequiredResponse(), { status: 401 });
+    }
+
+    const payload = await runShlem(message, history, context, Boolean(session));
 
     // When in token_creation context, extract fields and override generic fallback replies
     // But first check if the user is exiting token creation
@@ -227,7 +234,65 @@ function parseHistory(value: unknown): ShlemHistoryTurn[] {
     });
 }
 
-function runShlem(message: string, history: ShlemHistoryTurn[], context?: string): Promise<ShlemPayload> {
+function requiresWalletSession(message: string, context?: string): boolean {
+  if (context === "token_creation") {
+    return false;
+  }
+
+  const lower = message.toLowerCase();
+  return [
+    /\b(?:my|wallet|account)\s+(?:balance|balances|assets?|tokens?|notes?|history|transactions?|address)\b/,
+    /\b(?:balance|balances|assets?|tokens?|notes?|history|transactions?)\b/,
+    /\b(?:send|transfer|pay|receive|scan|sync|faucet|drip|stake|unstake)\b/,
+    /\b(?:mint|deploy|create)\s+(?:a\s+)?token\b/,
+    /\b(?:use|read|check|show)\s+(?:my\s+)?(?:wallet|funds|transactions?|notes?)\b/,
+  ].some((pattern) => pattern.test(lower));
+}
+
+function buildWalletSessionRequiredResponse(): ShlemApiResponse {
+  const reply = "I can talk you through that, but I need an unlocked Tonkl wallet session before I read balances, inspect wallet history, prepare sends, use the faucet, or touch token actions.";
+
+  return {
+    reply,
+    kind: "error",
+    preview: null,
+    requiresConfirmation: false,
+    executionEnabled: false,
+    modelStatus: "skipped_blocked",
+    modelName: null,
+    payload: {
+      message: reply,
+      blocked: true,
+      intent: "wallet_session_required",
+      model: {
+        ok: false,
+        name: null,
+        status: "skipped_blocked",
+        text: reply,
+      },
+      execution: {
+        ok: false,
+        message: reply,
+        error: "wallet_session_required",
+        data: {
+          error: {
+            suggestions: [
+              "Create or unlock your wallet first.",
+              "Then ask Shlem again and the request will include your wallet session.",
+            ],
+          },
+        },
+      },
+    },
+  };
+}
+
+function runShlem(
+  message: string,
+  history: ShlemHistoryTurn[],
+  context?: string,
+  allowWalletAccess = false,
+): Promise<ShlemPayload> {
   const shlemDir = process.env.SHLEM_DIR || DEFAULT_SHLEM_DIR;
   const python = process.env.SHLEM_PYTHON || "python3";
   const pythonPath = `${shlemDir}/src`;
@@ -237,7 +302,7 @@ function runShlem(message: string, history: ShlemHistoryTurn[], context?: string
    
     || DEFAULT_NODE_URL
   );
-  const walletCmd = buildWalletCommand(nodeUrl);
+  const walletCmd = allowWalletAccess ? buildWalletCommand(nodeUrl) : undefined;
   const args = ["-m", "shlem.cli", message, "--json", "--node-url", nodeUrl];
   if (history.length > 0) {
     args.push("--history-json", JSON.stringify(history));
@@ -556,7 +621,6 @@ function buildTokenCreationReply(
   const hasSymbol = Boolean(merged.symbol);
   const hasName = Boolean(merged.name);
   const hasSupply = Boolean(merged.initialSupply) && String(merged.initialSupply) !== "0";
-  const hasCategory = Boolean(merged.category);
   const hasDescription = Boolean(merged.description) && String(merged.description).length >= 10;
 
   const hasNew = Object.keys(extracted).length > 0;
@@ -643,7 +707,6 @@ function extractTokenFields(
 ): TokenFields {
   const fields: TokenFields = {};
   const text = message;
-  const lower = message.toLowerCase();
 
   // ── Symbol ────────────────────────────────────────────────
   // "symbol VIBE", "ticker TEST", "symbol is ABC"

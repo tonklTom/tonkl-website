@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { tonklSessionHeaders } from "@/lib/client-session";
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ export function useTonkl(): TonklState {
       // Fetch node health + wallet summary in parallel
       const [nodeRes, walletRes] = await Promise.allSettled([
         fetch("/api/node").then((r) => r.json()),
-        fetch("/api/wallet").then((r) => r.json()),
+        fetch("/api/wallet", { headers: tonklSessionHeaders() }).then((r) => r.json()),
       ]);
 
       // Node status

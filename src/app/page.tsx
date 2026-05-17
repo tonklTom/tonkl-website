@@ -10,6 +10,7 @@ import { Send } from "@/components/ui/send";
 import { Receive } from "@/components/ui/receive";
 import { FaucetInline } from "@/components/ui/faucet-inline";
 import { AnimatePresence } from "framer-motion";
+import { getTonklSessionToken, storeTonklSessionToken } from "@/lib/client-session";
 
 // Pages that require a wallet to exist
 const WALLET_PAGES = new Set(["wallet", "dashboard", "send", "receive", "faucet", "unlock"]);
@@ -44,11 +45,9 @@ export default function Home() {
             return;
           }
 
-          // Wallet exists — if they asked for unlock, show unlock
-          // Otherwise let them through (the unlock/dashboard components
-          // will handle passphrase if needed)
-          if (page === "unlock") {
-            // Try auto-unlock (unencrypted wallet)
+          // Wallet exists. If there is no browser session yet, try auto-unlock
+          // for unencrypted wallets; encrypted wallets should go through unlock.
+          if (!getTonklSessionToken()) {
             try {
               const unlockResp = await fetch("/api/onboard", {
                 method: "POST",
@@ -58,13 +57,20 @@ export default function Home() {
               if (unlockResp.ok) {
                 const unlockData = await unlockResp.json();
                 if (unlockData.unlocked) {
+                  storeTonklSessionToken(unlockData.sessionToken);
                   setActivePage("dashboard");
                   window.history.replaceState(null, '', '/#dashboard');
                   return;
                 }
               }
             } catch {
-              // Needs passphrase — show unlock
+              // Needs passphrase — send protected pages through unlock below.
+            }
+
+            if (page !== "receive") {
+              setActivePage("unlock");
+              window.history.replaceState(null, '', '/#unlock');
+              return;
             }
           }
         } catch {

@@ -8,10 +8,14 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// Parse allowed origins from env, default to same-origin
+// Parse allowed origins from env. Production defaults to same-origin only.
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
   : [];
+
+const ALLOWED_METHODS = "GET, POST, OPTIONS";
+const ALLOWED_HEADERS = "Content-Type, X-Tonkl-Session";
+const CORS_MAX_AGE = "86400";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -35,11 +39,9 @@ export function middleware(request: NextRequest) {
 
   // ── CORS headers ────────────────────────────────────────────
   const origin = request.headers.get("origin");
-  if (origin && isAllowedOrigin(origin)) {
-    response.headers.set("Access-Control-Allow-Origin", origin);
-    response.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    response.headers.set("Access-Control-Allow-Headers", "Content-Type");
-    response.headers.set("Access-Control-Max-Age", "86400");
+  const allowedOrigin = getAllowedCorsOrigin(request, origin);
+  if (allowedOrigin) {
+    setCorsHeaders(response.headers, allowedOrigin);
   }
 
   return response;
@@ -47,30 +49,48 @@ export function middleware(request: NextRequest) {
 
 function handlePreflight(request: NextRequest): NextResponse {
   const origin = request.headers.get("origin");
+  const allowedOrigin = getAllowedCorsOrigin(request, origin);
 
-  if (origin && isAllowedOrigin(origin)) {
+  if (allowedOrigin) {
     return new NextResponse(null, {
       status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
-      },
+      headers: corsHeaders(allowedOrigin),
     });
   }
 
   return new NextResponse(null, { status: 403 });
 }
 
-function isAllowedOrigin(origin: string): boolean {
+function getAllowedCorsOrigin(request: NextRequest, origin: string | null): string | null {
+  if (!origin) return null;
+
   // In development, allow all origins
-  if (process.env.NODE_ENV !== "production") return true;
+  if (process.env.NODE_ENV !== "production") return origin;
 
-  // In production, check against the whitelist
-  if (ALLOWED_ORIGINS.length === 0) return true; // No whitelist = same-origin only (browser enforced)
+  // Same-origin browser requests stay allowed even with no explicit whitelist.
+  if (origin === request.nextUrl.origin) return origin;
 
-  return ALLOWED_ORIGINS.includes(origin);
+  // Production cross-origin access must be explicit.
+  if (ALLOWED_ORIGINS.includes(origin)) return origin;
+
+  return null;
+}
+
+function corsHeaders(origin: string): HeadersInit {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": ALLOWED_METHODS,
+    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
+    "Access-Control-Max-Age": CORS_MAX_AGE,
+    Vary: "Origin",
+  };
+}
+
+function setCorsHeaders(headers: Headers, origin: string): void {
+  const values = corsHeaders(origin);
+  for (const [key, value] of Object.entries(values)) {
+    headers.set(key, value);
+  }
 }
 
 export const config = {

@@ -369,6 +369,12 @@ function runWalletArgs(extraArgs: string[], passphrase?: string): Promise<string
       env: safeEnv,
     });
 
+    if (!child.stdout || !child.stderr) {
+      activeOps--;
+      reject(new Error("Wallet operation pipe setup failed"));
+      return;
+    }
+
     // SECURITY: Write passphrase via stdin instead of CLI arg
     if (passphrase && child.stdin) {
       child.stdin.write(passphrase + "\n");

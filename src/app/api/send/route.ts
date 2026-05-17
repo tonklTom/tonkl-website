@@ -138,6 +138,7 @@ export async function POST(request: Request) {
   const ensure0x = (s: string) => s && !s.startsWith("0x") ? `0x${s}` : s;
   let toPkX = ensure0x(recipient);
   let toPkY = "";
+  let toScanPk = "";
 
   // Look up pk_y — check if recipient matches one of our own keys
   try {
@@ -164,9 +165,15 @@ export async function POST(request: Request) {
     );
   }
 
+  try {
+    toScanPk = await resolveScanPkForAddress(toPkX, body.passphrase);
+  } catch {
+    // Not fatal; the transfer can still be created, but auto-scan may not import the recipient note.
+  }
+
   // ── Execute send ────────────────────────────────────────────
   try {
-    const output = await runSend(amount, toPkX, toPkY, assetId, body.passphrase);
+    const output = await runSend(amount, toPkX, toPkY, assetId, body.passphrase, toScanPk);
 
     // Try to extract tx hash from output
     const txHash = extractTxHash(output);
@@ -190,6 +197,16 @@ export async function POST(request: Request) {
       );
     }
 
+    if (msg.includes("Single-input transfer needs a second input")) {
+      return Response.json(
+        {
+          error: "needs_spendable_pair",
+          message: "This wallet has one spendable note and needs a split/prep step before sending.",
+        },
+        { status: 409 }
+      );
+    }
+
     return Response.json(
       { error: "send_failed", message: "Transfer failed. The node may be offline or proof generation failed." },
       { status: 500 }
@@ -198,6 +215,16 @@ export async function POST(request: Request) {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
+
+async function resolveScanPkForAddress(pkX: string, passphrase?: string): Promise<string> {
+  const output = await runScanKeys(passphrase);
+  const result = JSON.parse(output) as {
+    scan_keys?: Array<{ pk_x?: string; scan_pk_hex?: string }>;
+  };
+  const norm = (s: string) => (s || "").replace(/^0x/i, "").toLowerCase();
+  const match = (result.scan_keys || []).find((key) => norm(key.pk_x || "") === norm(pkX));
+  return match?.scan_pk_hex || "";
+}
 
 function runListKeys(passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -220,6 +247,11 @@ function runListKeys(passphrase?: string): Promise<string> {
       stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    if (!child.stdout) {
+      reject(new Error("Wallet key query pipe setup failed"));
+      return;
+    }
 
     // Write passphrase to stdin if provided
     if (passphrase && child.stdin) {
@@ -254,22 +286,12 @@ function runListKeys(passphrase?: string): Promise<string> {
   });
 }
 
-function runSend(
-  amount: number,
-  toPkX: string,
-  toPkY: string,
-  assetId: string,
-  passphrase?: string
-): Promise<string> {
+function runScanKeys(passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    activeTransfers++;
-
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
-    // SECURITY: Pass passphrase via stdin to avoid ps visibility
     if (passphrase) args.push("--passphrase-stdin");
-    args.push("send", String(amount), "--to-pk-x", toPkX, "--to-pk-y", toPkY);
-    if (assetId !== "1") args.push("--asset-id", assetId);
+    args.push("--json", "scan-keys");
 
     const safeEnv: NodeJS.ProcessEnv = {
       PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
@@ -284,6 +306,83 @@ function runSend(
       stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    if (!child.stdout) {
+      reject(new Error("scan-keys pipe setup failed"));
+      return;
+    }
+
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
+
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (stdout.length < 16_384) stdout += chunk;
+    });
+
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("scan-keys timed out"));
+    }, 15_000);
+
+    child.on("error", (error: Error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+
+    child.on("close", (code: number | null) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error("scan-keys failed"));
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
+}
+
+function runSend(
+  amount: number,
+  toPkX: string,
+  toPkY: string,
+  assetId: string,
+  passphrase?: string,
+  toScanPk?: string
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    activeTransfers++;
+
+    const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
+    if (WALLET_DB) args.push("--db", WALLET_DB);
+    // SECURITY: Pass passphrase via stdin to avoid ps visibility
+    if (passphrase) args.push("--passphrase-stdin");
+    args.push("send", String(amount), "--to-pk-x", toPkX, "--to-pk-y", toPkY);
+    if (toScanPk) args.push("--to-scan-pk", toScanPk);
+    if (assetId !== "1") args.push("--asset-id", assetId);
+
+    const safeEnv: NodeJS.ProcessEnv = {
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
+      HOME: process.env.HOME || "/tmp",
+      LANG: process.env.LANG || "en_US.UTF-8",
+      NODE_ENV: process.env.NODE_ENV,
+    };
+    if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
+    if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
+    if (process.env.TONKL_RPC_SECRET) safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
+
+    const child = spawn(PYTHON, args, {
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
+      env: safeEnv,
+    });
+
+    if (!child.stdout || !child.stderr) {
+      activeTransfers--;
+      reject(new Error("Transfer pipe setup failed"));
+      return;
+    }
 
     // Write passphrase to stdin if provided
     if (passphrase && child.stdin) {

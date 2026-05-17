@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Loader2, Lock } from "lucide-react";
+import { storeTonklSessionToken } from "@/lib/client-session";
 
 export function Unlock({ onUnlock }: { onUnlock: () => void }) {
   const [passphrase, setPassphrase] = useState("");
@@ -32,6 +33,7 @@ export function Unlock({ onUnlock }: { onUnlock: () => void }) {
       const data = await resp.json();
 
       if (resp.ok && data.unlocked) {
+        storeTonklSessionToken(data.sessionToken);
         onUnlock();
       } else {
         setError(true);

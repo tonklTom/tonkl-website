@@ -273,16 +273,15 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
     );
   }
 
-  // Get authority key from wallet
-  let authoritySk = "";
+  // Get authority key index from wallet. The private key stays inside the
+  // wallet process and is never returned through list-keys or this API route.
+  let authorityKeyIndex: number | null = null;
   try {
     const keysOutput = await runWalletCommand(["--json", "list-keys"]);
-    const keysResult = JSON.parse(keysOutput);
-    if (keysResult.keys && keysResult.keys.length > 0) {
-      authoritySk = keysResult.keys[0].spending_sk || "";
-      if (authoritySk && !authoritySk.startsWith("0x")) {
-        authoritySk = `0x${authoritySk}`;
-      }
+    const keysResult = JSON.parse(keysOutput) as { keys?: Array<{ index?: number }> };
+    const firstKey = keysResult.keys?.[0];
+    if (typeof firstKey?.index === "number") {
+      authorityKeyIndex = firstKey.index;
     }
   } catch {
     return Response.json(
@@ -291,7 +290,7 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
     );
   }
 
-  if (!authoritySk) {
+  if (authorityKeyIndex === null) {
     return Response.json(
       { error: "no_authority", message: "No spending key available to serve as token authority." },
       { status: 400 }
@@ -304,7 +303,7 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
     "--name", name,
     "--asset-id", assetId,
     "--decimals", String(decimals),
-    "--authority-sk", authoritySk,
+    "--authority-key-index", String(authorityKeyIndex),
   ];
 
   const initialSupply = body.initialSupply || 0;
@@ -321,8 +320,9 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
     }
   }
 
+  // SECURITY: Pass passphrase via stdin to avoid ps visibility
   if (body.passphrase) {
-    createArgs.unshift("--passphrase", body.passphrase);
+    createArgs.unshift("--passphrase-stdin");
   }
 
   try {
@@ -331,7 +331,13 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
 
     let output: string;
     try {
-      output = await runWalletCommand(createArgs, timeout);
+      output = await runWalletCommand(
+        createArgs,
+        timeout,
+        body.passphrase,
+        {},
+        true
+      );
     } finally {
       if (initialSupply > 0) activeMints--;
     }
@@ -460,7 +466,7 @@ async function handleCreate(body: TokenCreateRequest): Promise<Response> {
 
       // Compute risk + save metadata even on partial success
       const riskDetails: string[] = ["Initial mint failed — supply not yet minted"];
-      let riskScore: "low" | "medium" | "high" | "critical" = "medium";
+      const riskScore: "low" | "medium" | "high" | "critical" = "medium";
 
       if (!body.description || body.description.trim().length < 20) {
         riskDetails.push("Missing or short description");
@@ -552,13 +558,14 @@ async function handleMint(body: TokenMintRequest): Promise<Response> {
   if (body.numNotes && body.numNotes > 1) {
     args.push("--num-notes", String(Math.min(body.numNotes, 32)));
   }
+  // SECURITY: Pass passphrase via stdin to avoid ps visibility
   if (body.passphrase) {
-    args.unshift("--passphrase", body.passphrase);
+    args.unshift("--passphrase-stdin");
   }
 
   activeMints++;
   try {
-    const output = await runWalletCommand(args, MINT_TIMEOUT_MS);
+    const output = await runWalletCommand(args, MINT_TIMEOUT_MS, body.passphrase, {}, true);
     return Response.json({
       success: true,
       message: `Minted ${body.amount} tokens for asset ${body.assetId}`,
@@ -652,7 +659,13 @@ async function loadMetadata(assetId: string): Promise<TokenMetadata | null> {
   }
 }
 
-function runWalletCommand(extraArgs: string[], timeout = CMD_TIMEOUT_MS): Promise<string> {
+function runWalletCommand(
+  extraArgs: string[],
+  timeout = CMD_TIMEOUT_MS,
+  passphrase?: string,
+  secretEnv: Record<string, string> = {},
+  includeRpcSecret = false
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
@@ -671,11 +684,30 @@ function runWalletCommand(extraArgs: string[], timeout = CMD_TIMEOUT_MS): Promis
     };
     if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
+    if (includeRpcSecret && process.env.TONKL_RPC_SECRET) {
+      safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
+    }
+    for (const [key, value] of Object.entries(secretEnv)) {
+      if (/^[A-Z0-9_]+$/.test(key) && value) {
+        safeEnv[key] = value;
+      }
+    }
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    if (!child.stdout || !child.stderr) {
+      reject(new Error("Wallet command pipe setup failed"));
+      return;
+    }
+
+    // SECURITY: Write passphrase via stdin instead of CLI arg
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";

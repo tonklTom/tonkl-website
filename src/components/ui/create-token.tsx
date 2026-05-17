@@ -5,9 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Upload, Globe, AtSign, MessageCircle, SendHorizontal,
   Code, Loader2, CheckCircle, AlertTriangle, Shield, Sparkles,
-  ChevronDown, ChevronUp, Flame, Heart, Clock, Info, XCircle,
+  ChevronDown, ChevronUp, Flame, Heart, Info, XCircle,
   Bot, Pencil,
 } from "lucide-react";
+import { tonklSessionHeaders } from "@/lib/client-session";
+import { maskSecretText } from "@/lib/secret-mask";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -16,6 +18,39 @@ type TokenCategory =
   | "Impact" | "Community" | "Gaming" | "RWA" | "Other";
 
 type RiskScore = "low" | "medium" | "high" | "critical";
+
+function RiskBadge({ score }: { score: RiskScore }) {
+  const config = {
+    low: { color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/30", label: "Low Risk" },
+    medium: { color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/30", label: "Medium Risk" },
+    high: { color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30", label: "High Risk" },
+    critical: { color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30", label: "Critical Risk" },
+  };
+  const c = config[score];
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${c.color} ${c.bg} border ${c.border}`}>
+      <Shield className="w-3 h-3" /> {c.label}
+    </span>
+  );
+}
+
+function TierBadge({ tier }: { tier: string }) {
+  if (tier === "verified") return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/30">
+      <CheckCircle className="w-3 h-3" /> Verified
+    </span>
+  );
+  if (tier === "unverified") return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-red-400 bg-red-500/10 border border-red-500/30">
+      <AlertTriangle className="w-3 h-3" /> Unverified
+    </span>
+  );
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-white/60 bg-white/5 border border-white/10">
+      Standard
+    </span>
+  );
+}
 
 type TokenFormData = {
   // Identity
@@ -162,7 +197,7 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
     const text = shlemInput.trim();
     if (!text || shlemLoading) return;
 
-    const userMsg: ShlemMessage = { id: `u-${Date.now()}`, text, isUser: true };
+    const userMsg: ShlemMessage = { id: `u-${Date.now()}`, text: maskSecretText(text).text, isUser: true };
     const loadingMsg: ShlemMessage = { id: `l-${Date.now()}`, text: "", isUser: false, isLoading: true };
     setShlemMessages((prev) => [...prev, userMsg, loadingMsg]);
     setShlemInput("");
@@ -184,7 +219,7 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
       });
 
       const data = await resp.json();
-      const reply = data.reply || "I didn't catch that. Could you describe your token again?";
+      const reply = maskSecretText(data.reply || "I didn't catch that. Could you describe your token again?").text;
 
       // Check if Shlem extracted any token fields
       const extracted: Partial<TokenFormData> = {};
@@ -262,7 +297,7 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
     try {
       const resp = await fetch("/api/token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({
           action: "create",
           symbol: form.symbol.toUpperCase(),
@@ -303,43 +338,6 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
     } finally {
       setIsCreating(false);
     }
-  };
-
-  // ── Risk badge ────────────────────────────────────────────────
-
-  const RiskBadge = ({ score }: { score: RiskScore }) => {
-    const config = {
-      low: { color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/30", label: "Low Risk" },
-      medium: { color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/30", label: "Medium Risk" },
-      high: { color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30", label: "High Risk" },
-      critical: { color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30", label: "Critical Risk" },
-    };
-    const c = config[score];
-    return (
-      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${c.color} ${c.bg} border ${c.border}`}>
-        <Shield className="w-3 h-3" /> {c.label}
-      </span>
-    );
-  };
-
-  // ── Tier badge ────────────────────────────────────────────────
-
-  const TierBadge = ({ tier }: { tier: string }) => {
-    if (tier === "verified") return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/30">
-        <CheckCircle className="w-3 h-3" /> Verified
-      </span>
-    );
-    if (tier === "unverified") return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-red-400 bg-red-500/10 border border-red-500/30">
-        <AlertTriangle className="w-3 h-3" /> Unverified
-      </span>
-    );
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium text-white/60 bg-white/5 border border-white/10">
-        Standard
-      </span>
-    );
   };
 
   // ── Completeness indicator ────────────────────────────────────

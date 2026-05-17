@@ -28,7 +28,12 @@ const MAX_SESSIONS = 100;                     // prevent memory exhaustion
 const CLEANUP_INTERVAL = 5 * 60 * 1000;      // 5 minutes
 
 // Token -> Session
-const sessions = new Map<string, Session>();
+// Use globalThis to survive Next.js HMR reloads in dev mode
+const g = globalThis as unknown as { __tonklSessions?: Map<string, Session> };
+if (!g.__tonklSessions) {
+  g.__tonklSessions = new Map<string, Session>();
+}
+const sessions = g.__tonklSessions;
 
 // Periodic cleanup
 const cleanupTimer = setInterval(() => {

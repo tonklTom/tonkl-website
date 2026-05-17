@@ -4,12 +4,12 @@
  * Dispenses testnet TNKL tokens to a given address.
  * Rate limited: 1 request per address per hour, 10 total per IP per hour.
  *
- * Usage:  POST /api/faucet { address: "obs1..." }
+ * Usage:  POST /api/faucet { address: "64-char hex pk_x" }
  */
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
-import { requireSession } from "@/lib/session";
+import { validateSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -21,6 +21,8 @@ const PYTHON =
   process.env.TONKL_PYTHON || "python3";
 const WALLET_DB =
   process.env.TONKL_WALLET_DB || "";
+const FAUCET_DB =
+  process.env.TONKL_FAUCET_DB || "";
 const FAUCET_AMOUNT = process.env.FAUCET_AMOUNT || "100";
 const REQUEST_TIMEOUT_MS = 120_000; // Faucet TX takes longer (ZK proving)
 
@@ -34,12 +36,33 @@ let activeDispenses = 0;
 
 // ─── Address validation ─────────────────────────────────────────
 // Tonkl addresses are hex public keys (64 hex chars)
-const ADDRESS_PATTERN = /^[0-9a-fA-F]{64}$/;
+const ADDRESS_PATTERN = /^(0x)?[0-9a-fA-F]{64}$/;
+
+type WalletKey = {
+  index?: number;
+  pk_x?: string;
+  pk_y?: string;
+};
+
+type RecipientKey = {
+  keyIndex: number;
+  pkX: string;
+  pkY: string;
+  scanPk?: string;
+};
 
 export async function POST(request: Request) {
   // ── Session auth ────────────────────────────────────────────
-  const authFailed = requireSession(request);
-  if (authFailed) return authFailed;
+  const session = validateSession(request);
+  if (!session) {
+    return Response.json(
+      {
+        error: "unauthorized",
+        message: "Valid session required. Create or unlock a wallet first via /api/onboard.",
+      },
+      { status: 401 }
+    );
+  }
 
   // ── Rate limit by IP ────────────────────────────────────────
   const clientKey = getClientKey(request);
@@ -66,6 +89,7 @@ export async function POST(request: Request) {
   }
 
   const address = typeof body.address === "string" ? body.address.trim() : "";
+  const normalizedAddress = normalizeHex(address);
 
   // ── Validate address ────────────────────────────────────────
   if (!address) {
@@ -82,8 +106,16 @@ export async function POST(request: Request) {
     );
   }
 
+  const sessionAddress = normalizeHex(session.address);
+  if (ADDRESS_PATTERN.test(session.address) && sessionAddress !== normalizedAddress) {
+    return Response.json(
+      { error: "address_mismatch", message: "Faucet requests must use the wallet address from the active session." },
+      { status: 403 }
+    );
+  }
+
   // ── Rate limit by address ───────────────────────────────────
-  const addrLimited = checkRateLimit("faucet-addr", address.toLowerCase(), ADDR_RATE_LIMIT);
+  const addrLimited = checkRateLimit("faucet-addr", normalizedAddress, ADDR_RATE_LIMIT);
   if (addrLimited) return addrLimited;
 
   // ── Concurrent limit ────────────────────────────────────────
@@ -94,41 +126,29 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── Look up spending_sk from user's wallet ────────────────────
-  // We use --to-sk so the faucet CLI can auto-import the received
-  // note into the user's wallet. The sk stays server-side.
-  let spendingSk = "";
-  let displayAddr = address.slice(0, 8) + "..." + address.slice(-8);
+  // ── Resolve the requested address to a local wallet key ──────
+  // The route must not silently use the first key; the selected key
+  // has to match the requested/session address.
+  let recipientKey: RecipientKey | null = null;
   try {
-    const keysOutput = await runWalletCommand(["--json", "list-keys"]);
-    // SECURITY: Never log list-keys output — it contains spending_sk
-    const keysResult = JSON.parse(keysOutput);
-    if (keysResult.keys && keysResult.keys.length > 0) {
-      const key = keysResult.keys[0];
-      spendingSk = key.spending_sk || "";
-      // Ensure 0x prefix
-      if (spendingSk && !spendingSk.startsWith("0x")) {
-        spendingSk = `0x${spendingSk}`;
-      }
-      const pkx = key.pk_x || "";
-      displayAddr = pkx.slice(0, 10) + "..." + pkx.slice(-8);
-    }
-  } catch (err) {
+    recipientKey = await resolveRecipientKey(normalizedAddress);
+  } catch {
     if (process.env.NODE_ENV !== "production") {
       console.error("[faucet] list-keys failed (details redacted)");
     }
   }
 
-  if (!spendingSk) {
+  if (!recipientKey) {
     return Response.json(
-      { error: "missing_keys", message: "Could not find wallet keys. Make sure the wallet has derived keys." },
+      { error: "recipient_not_found", message: "Could not match that address to the active wallet. Use the address from Receive." },
       { status: 400 }
     );
   }
 
   // ── Dispense tokens ─────────────────────────────────────────
   try {
-    const result = await runFaucet(spendingSk, FAUCET_AMOUNT);
+    const result = await runFaucet(recipientKey.pkX, recipientKey.pkY, FAUCET_AMOUNT, recipientKey.scanPk);
+    const displayAddr = recipientKey.pkX.slice(0, 10) + "..." + recipientKey.pkX.slice(-8);
     return Response.json({
       success: true,
       message: `Sent ${FAUCET_AMOUNT} TNKL to ${displayAddr}`,
@@ -137,17 +157,38 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "";
+    const lowered = msg.toLowerCase();
     if (process.env.NODE_ENV !== "production") {
       console.error("[faucet] Error:", msg.slice(0, 500));
     }
     // Surface useful errors to the client
-    if (msg.includes("insufficient") || msg.includes("balance")) {
+    if (
+      lowered.includes("tree_index") ||
+      lowered.includes("node leaf count") ||
+      lowered.includes("witness") ||
+      lowered.includes("merkle")
+    ) {
+      return Response.json(
+        {
+          error: "faucet_state_mismatch",
+          message: "Faucet wallet state is out of sync with the node. Sync or reset the faucet wallet for this testnet.",
+        },
+        { status: 503 }
+      );
+    }
+    if (lowered.includes("cannot connect to node") || lowered.includes("node unreachable")) {
+      return Response.json(
+        { error: "node_unavailable", message: "Faucet could not reach the Tonkl node." },
+        { status: 502 }
+      );
+    }
+    if (lowered.includes("insufficient") || lowered.includes("faucet has insufficient")) {
       return Response.json(
         { error: "faucet_empty", message: "Faucet wallet has no tokens. The testnet may need to be restarted with genesis." },
         { status: 503 }
       );
     }
-    if (msg.includes("Rate limited") || msg.includes("cooldown")) {
+    if (lowered.includes("rate limited") || lowered.includes("cooldown")) {
       return Response.json(
         { error: "cooldown", message: "You already received tokens recently. Try again later." },
         { status: 429 }
@@ -174,10 +215,48 @@ export async function GET() {
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-function runWalletCommand(extraArgs: string[]): Promise<string> {
+function normalizeHex(value: string): string {
+  return value.replace(/^0x/i, "").toLowerCase();
+}
+
+function ensure0x(value: string): string {
+  return value.startsWith("0x") ? value : `0x${value}`;
+}
+
+async function resolveRecipientKey(address: string): Promise<RecipientKey | null> {
+  // Query the USER's wallet to find pk_y for the given pk_x (address)
+  const keysOutput = await runWalletCommand(["--json", "list-keys"], WALLET_DB);
+  const keysResult = JSON.parse(keysOutput) as { keys?: WalletKey[] };
+
+  const match = (keysResult.keys || []).find((key) => normalizeHex(key.pk_x || "") === address);
+  if (typeof match?.index !== "number" || !match.pk_x || !match.pk_y) return null;
+
+  return {
+    keyIndex: match.index,
+    pkX: ensure0x(match.pk_x),
+    pkY: ensure0x(match.pk_y),
+    scanPk: await resolveRecipientScanPk(address),
+  };
+}
+
+async function resolveRecipientScanPk(address: string): Promise<string | undefined> {
+  try {
+    const output = await runWalletCommand(["--json", "scan-keys"], WALLET_DB);
+    const result = JSON.parse(output) as {
+      scan_keys?: Array<{ pk_x?: string; scan_pk_hex?: string }>;
+    };
+    const match = (result.scan_keys || []).find((key) => normalizeHex(key.pk_x || "") === address);
+    return match?.scan_pk_hex ? ensure0x(match.scan_pk_hex) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function runWalletCommand(extraArgs: string[], dbPath?: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    const db = dbPath || WALLET_DB;
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
-    if (WALLET_DB) args.push("--db", WALLET_DB);
+    if (db) args.push("--db", db);
     args.push(...extraArgs);
 
     const safeEnv: NodeJS.ProcessEnv = {
@@ -220,23 +299,25 @@ function runWalletCommand(extraArgs: string[]): Promise<string> {
   });
 }
 
-function runFaucet(toSk: string, amount: string): Promise<string> {
+function runFaucet(pkX: string, pkY: string, amount: string, scanPk?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     activeDispenses++;
 
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
-    if (WALLET_DB) args.push("--db", WALLET_DB);
-    args.push("faucet", "--to-sk-env", "TONKL_FAUCET_SK", "--amount", amount, "--no-limit");
+    // Use the FAUCET wallet (funded at genesis), not the user's wallet
+    if (FAUCET_DB) args.push("--db", FAUCET_DB);
+    args.push("faucet", "--to-pk-x", pkX, "--to-pk-y", pkY, "--amount", amount);
+    if (scanPk) args.push("--to-scan-pk", scanPk);
 
-    // SECURITY: Pass spending key via env var, not CLI arg (CLI args are visible in ps)
+    // SECURITY: Recipient spending key stays inside the wallet process.
     const safeEnv: NodeJS.ProcessEnv = {
       PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
       HOME: process.env.HOME || "/tmp",
       LANG: process.env.LANG || "en_US.UTF-8",
       NODE_ENV: process.env.NODE_ENV,
-      TONKL_FAUCET_SK: toSk,
     };
     if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
+    if (process.env.TONKL_RPC_SECRET) safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
 
     const child = spawn(PYTHON, args, {
       stdio: ["ignore", "pipe", "pipe"] as const,

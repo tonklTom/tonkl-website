@@ -2,8 +2,9 @@
 
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowUpRight, Loader2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { ProofProgressModal, type ProofStatus } from "./proof-modal";
+import { tonklSessionHeaders } from "@/lib/client-session";
 
 const ADDRESS_PATTERN = /^(0x)?[0-9a-fA-F]{1,64}$/;
 
@@ -12,6 +13,9 @@ export function Send({ onBack }: { onBack: () => void }) {
   const [amount, setAmount] = useState("");
   const [assetId, setAssetId] = useState("1");
   const [error, setError] = useState("");
+  const [needsPrep, setNeedsPrep] = useState(false);
+  const [prepStatus, setPrepStatus] = useState<"idle" | "preparing" | "success">("idle");
+  const [prepMessage, setPrepMessage] = useState("");
 
   // Proof modal state
   const [proofModalOpen, setProofModalOpen] = useState(false);
@@ -59,7 +63,7 @@ export function Send({ onBack }: { onBack: () => void }) {
       // Fire the actual send request
       const resp = await fetch("/api/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({
           amount: numAmount,
           recipientAddress: cleanRecipient.replace(/^0x/, ""),
@@ -70,6 +74,15 @@ export function Send({ onBack }: { onBack: () => void }) {
       const data = await resp.json();
 
       if (!resp.ok || !data.success) {
+        if (data.error === "needs_spendable_pair") {
+          setProofModalOpen(false);
+          setProofStatus("idle");
+          setNeedsPrep(true);
+          setPrepStatus("idle");
+          setPrepMessage("");
+          setError(data.message || "Prepare your wallet notes before sending.");
+          return;
+        }
         throw new Error(data.message || "Transfer failed");
       }
 
@@ -88,6 +101,32 @@ export function Send({ onBack }: { onBack: () => void }) {
     } catch (err) {
       setProofError(err instanceof Error ? err.message : "Transfer failed");
       setProofStatus("error");
+    }
+  };
+
+  const handlePrepareSpendable = async () => {
+    setError("");
+    setPrepStatus("preparing");
+    setPrepMessage("");
+
+    try {
+      const resp = await fetch("/api/prepare-spendable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
+        body: JSON.stringify({ assetId }),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok || !data.success) {
+        throw new Error(data.message || "Could not prepare wallet notes.");
+      }
+
+      setNeedsPrep(false);
+      setPrepStatus("success");
+      setPrepMessage(data.message || "Wallet is ready for sending.");
+    } catch (err) {
+      setPrepStatus("idle");
+      setError(err instanceof Error ? err.message : "Could not prepare wallet notes.");
     }
   };
 
@@ -139,6 +178,38 @@ export function Send({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
+          {(needsPrep || prepStatus !== "idle") && (
+            <div className="mb-6 p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
+              <div className="flex items-start gap-3">
+                {prepStatus === "success" ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : prepStatus === "preparing" ? (
+                  <Loader2 className="w-5 h-5 text-cyan-400 shrink-0 mt-0.5 animate-spin" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-cyan-300 shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-white text-sm font-medium">
+                    {prepStatus === "success" ? "Wallet ready" : "Prepare wallet for sending"}
+                  </p>
+                  <p className="text-white/55 text-sm mt-1">
+                    {prepMessage || "This creates padding notes needed by the shielded transfer circuit. Your balance stays the same."}
+                  </p>
+                  {prepStatus !== "success" && (
+                    <button
+                      onClick={handlePrepareSpendable}
+                      disabled={prepStatus === "preparing"}
+                      className="mt-4 px-4 py-2 bg-cyan-500 disabled:bg-cyan-500/30 text-black disabled:text-white/40 rounded-lg text-sm font-medium hover:bg-cyan-400 transition-colors inline-flex items-center gap-2"
+                    >
+                      {prepStatus === "preparing" && <Loader2 className="w-4 h-4 animate-spin" />}
+                      {prepStatus === "preparing" ? "Preparing..." : "Prepare Notes"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-6">
             {/* Recipient */}
             <div>
@@ -146,7 +217,7 @@ export function Send({ onBack }: { onBack: () => void }) {
               <input
                 type="text"
                 value={recipient}
-                onChange={(e) => { setRecipient(e.target.value); setError(""); }}
+                onChange={(e) => { setRecipient(e.target.value); setError(""); setNeedsPrep(false); }}
                 className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-4 text-white placeholder-white/20 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all font-mono text-sm"
                 placeholder="0x... (recipient public key)"
               />
@@ -159,7 +230,7 @@ export function Send({ onBack }: { onBack: () => void }) {
                 <input
                   type="number"
                   value={amount}
-                  onChange={(e) => { setAmount(e.target.value); setError(""); }}
+                  onChange={(e) => { setAmount(e.target.value); setError(""); setNeedsPrep(false); }}
                   className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-4 pr-20 text-white placeholder-white/20 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/50 transition-all text-lg"
                   placeholder="0"
                   min="1"
@@ -175,7 +246,7 @@ export function Send({ onBack }: { onBack: () => void }) {
               <label className="text-sm text-white/40 mb-2 block">Asset</label>
               <div className="flex gap-3">
                 <button
-                  onClick={() => setAssetId("1")}
+                  onClick={() => { setAssetId("1"); setNeedsPrep(false); setError(""); }}
                   className={`flex-1 py-3 rounded-xl font-medium text-sm transition-all ${
                     assetId === "1"
                       ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
@@ -185,7 +256,7 @@ export function Send({ onBack }: { onBack: () => void }) {
                   TNKL
                 </button>
                 <button
-                  onClick={() => setAssetId("4")}
+                  onClick={() => { setAssetId("4"); setNeedsPrep(false); setError(""); }}
                   className={`flex-1 py-3 rounded-xl font-medium text-sm transition-all ${
                     assetId === "4"
                       ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"

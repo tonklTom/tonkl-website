@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Shield, Key, ArrowRight, Eye, EyeOff, AlertTriangle, ShieldCheck, Loader2 } from "lucide-react";
+import { storeTonklSessionToken } from "@/lib/client-session";
 
 type OnboardingStep = "checking" | "welcome" | "passphrase" | "creating" | "seed" | "verify";
 
 export function Onboarding({ onComplete }: { onComplete: () => void }) {
-  const [step, setStep] = useState<OnboardingStep>("checking");
+  const [step, setStep] = useState<OnboardingStep>("welcome");
   const [passphrase, setPassphrase] = useState("");
   const [confirmPassphrase, setConfirmPassphrase] = useState("");
   const [showPassphrase, setShowPassphrase] = useState(false);
@@ -17,17 +18,12 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   // Real wallet data from API
   const [seedWords, setSeedWords] = useState<string[]>([]);
   const [walletAddress, setWalletAddress] = useState("");
+  const [pendingSessionToken, setPendingSessionToken] = useState("");
 
   // Verification states — randomized indices
   const [verifyIndices, setVerifyIndices] = useState<number[]>([]);
   const [verifyInputs, setVerifyInputs] = useState(["", "", ""]);
   const [verifyError, setVerifyError] = useState(false);
-
-  // ── Check if wallet already exists on mount ─────────────────
-  // Router already checked wallet state — just show welcome
-  useEffect(() => {
-    setStep("welcome");
-  }, []);
 
   // ── Create wallet via API ───────────────────────────────────
   const createWallet = useCallback(async () => {
@@ -62,6 +58,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       }
       setSeedWords(words);
       setWalletAddress(data.address || "");
+      setPendingSessionToken(typeof data.sessionToken === "string" ? data.sessionToken : "");
 
       // Pick 3 random indices for verification
       const indices: number[] = [];
@@ -87,6 +84,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
 
     if (isCorrect) {
       setVerifyError(false);
+      storeTonklSessionToken(pendingSessionToken);
       onComplete();
     } else {
       setVerifyError(true);
@@ -98,26 +96,25 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       key="welcome"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 1, duration: 1 }}
       exit={{ opacity: 0, x: -20 }}
-      className="max-w-md w-full flex flex-col items-center text-center"
+      className="max-w-md w-full flex flex-col items-center text-center relative z-10"
     >
-      <div className="w-20 h-20 bg-cyan-500/10 rounded-full flex items-center justify-center mb-8 border border-cyan-500/20 shadow-[0_0_30px_rgba(34,211,238,0.2)]">
-        <Shield className="w-10 h-10 text-cyan-400" />
-      </div>
-      <h1 className="text-4xl font-light text-white mb-4">Welcome to Tonkl</h1>
-      <p className="text-white/50 mb-12">The privacy-preserving layer. Shield your assets and transact with zero-knowledge.</p>
+      <h1 className="text-5xl md:text-6xl font-serif font-light text-white mb-6 drop-shadow-xl">
+        Welcome <span className="font-serif text-white/80">Λ</span>
+      </h1>
+      <p className="text-white/60 mb-12 text-lg font-light drop-shadow-md">The privacy-preserving layer. Shield your assets and transact with zero-knowledge.</p>
 
       <div className="w-full space-y-4">
         <button
           onClick={() => setStep("passphrase")}
-          className="w-full py-4 bg-cyan-500 text-black font-medium rounded-xl hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2 group"
+          className="w-full py-4 bg-white/5 backdrop-blur-md border border-white/10 text-white/90 font-medium rounded-full hover:bg-white/10 hover:text-white transition-all duration-300"
         >
           Create New Wallet
-          <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
         </button>
         <button
           onClick={() => window.location.hash = "#restore"}
-          className="w-full py-4 bg-white/5 text-white/70 font-medium rounded-xl hover:bg-white/10 hover:text-white transition-colors border border-white/5"
+          className="w-full py-4 bg-white/5 backdrop-blur-md border border-white/10 text-white/90 font-medium rounded-full hover:bg-white/10 hover:text-white transition-all duration-300"
         >
           Restore from Seed Phrase
         </button>
@@ -272,7 +269,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         disabled={!seedRevealed}
         className="w-full py-4 bg-cyan-500 disabled:bg-cyan-500/30 text-black disabled:text-white/30 font-medium rounded-xl hover:bg-cyan-400 transition-colors"
       >
-        I've written it down safely
+        I&apos;ve written it down safely
       </button>
     </motion.div>
   );
@@ -287,7 +284,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
     >
       <div className="mb-8">
         <h2 className="text-3xl font-light text-white mb-2">Verify Backup</h2>
-        <p className="text-white/50">Let's make sure you wrote it down correctly. Enter the requested words below.</p>
+        <p className="text-white/50">Let&apos;s make sure you wrote it down correctly. Enter the requested words below.</p>
       </div>
 
       <div className="space-y-6">
@@ -335,9 +332,22 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   );
 
   return (
-    <div className="w-full min-h-screen bg-[#111111] flex items-center justify-center px-6 relative overflow-hidden">
+    <div className="w-full min-h-screen bg-[#020202] flex items-center justify-center px-6 relative overflow-hidden">
+      {/* Animated Background layer */}
+      <div className="absolute inset-0 z-0 bg-black pointer-events-none overflow-hidden">
+        <motion.img
+          src="/david_statue_bg.png"
+          alt="Tonkl Background"
+          initial={{ scale: 1.5, filter: "blur(0px) brightness(1.2)" }}
+          animate={{ scale: 1, filter: "blur(16px) brightness(0.6)" }}
+          transition={{ duration: 2.5, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/90" />
+      </div>
+
       {/* Testnet Banner */}
-      <div className="absolute top-0 left-0 w-full bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-500/80 py-2 text-center text-sm font-medium">
+      <div className="absolute top-0 left-0 w-full bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-500/80 py-2 text-center text-sm font-medium z-20">
         Alpha Testnet — Tokens have no real value. Expect bugs.
       </div>
 

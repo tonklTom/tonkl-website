@@ -5,6 +5,7 @@
  * for the configured wallet database. All key material stays server-side.
  *
  * Security measures:
+ *  - Valid app session required for all wallet metadata
  *  - Strict command whitelist (read-only only)
  *  - Rate limiting per client IP (30 req/min)
  *  - Concurrent execution limit (max 3 wallet processes at once)
@@ -20,6 +21,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
+import { requireSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -48,10 +50,8 @@ const SAFE_COMMANDS = new Set([
   "history",
   "assets",
   "address",
-  "list-keys",
   "scan",
   "sync",
-  "scan-keys",
   "validators",
   "stakes",
   "epoch-info",
@@ -67,6 +67,9 @@ export async function GET(request: Request) {
   const clientKey = getClientKey(request);
   const limited = checkRateLimit("wallet", clientKey, RATE_LIMIT);
   if (limited) return limited;
+
+  const authFailed = requireSession(request);
+  if (authFailed) return authFailed;
 
   // If wallet script isn't configured, return read-only node data only
   if (!WALLET_SCRIPT) {
@@ -111,6 +114,9 @@ export async function POST(request: Request) {
   const clientKey = getClientKey(request);
   const limited = checkRateLimit("wallet", clientKey, RATE_LIMIT);
   if (limited) return limited;
+
+  const authFailed = requireSession(request);
+  if (authFailed) return authFailed;
 
   // ── Body size check ─────────────────────────────────────────
   const contentLength = request.headers.get("content-length");
@@ -161,8 +167,13 @@ export async function POST(request: Request) {
 
   // ── Execute ─────────────────────────────────────────────────
   try {
+    if (command === "address") {
+      const output = await getPublicAddressOutput();
+      return Response.json({ command, output });
+    }
+
     const output = await runWalletCommand(command);
-    return Response.json({ command, output });
+    return Response.json({ command, output: redactWalletOutput(output) });
   } catch {
     // SECURITY: Never forward internal error details (stderr, file paths, etc.)
     return Response.json(
@@ -289,6 +300,38 @@ async function getWalletSummary(): Promise<WalletSummary> {
   };
 }
 
+async function getPublicAddressOutput(): Promise<string> {
+  const output = await runWalletCommand("list-keys");
+  let parsed: { keys?: Array<{ index?: number; pk_x?: string; pk_y?: string }> };
+
+  try {
+    parsed = JSON.parse(output) as {
+      keys?: Array<{ index?: number; pk_x?: string; pk_y?: string }>;
+    };
+  } catch {
+    return JSON.stringify({ status: "ok", addresses: [] });
+  }
+
+  const addresses = (parsed.keys || [])
+    .map((key) => ({
+      index: typeof key.index === "number" ? key.index : 0,
+      pk_x: typeof key.pk_x === "string" ? key.pk_x : "",
+      pk_y: typeof key.pk_y === "string" ? key.pk_y : "",
+    }))
+    .filter((key) => key.pk_x && key.pk_y);
+
+  return JSON.stringify({ status: "ok", addresses });
+}
+
+function redactWalletOutput(output: string): string {
+  return output
+    .replace(/"spending_sk"\s*:\s*"[^"]*"/gi, '"spending_sk":"[redacted]"')
+    .replace(/"scan_sk"\s*:\s*"[^"]*"/gi, '"scan_sk":"[redacted]"')
+    .replace(/"mnemonic"\s*:\s*"[^"]*"/gi, '"mnemonic":"[redacted]"')
+    .replace(/Spending key \(sk\):\s*0x[0-9a-f]+/gi, "Spending key (sk): [redacted]")
+    .replace(/Seed phrase:\s*.*/gi, "Seed phrase: [redacted]");
+}
+
 function runWalletCommand(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // Track concurrent processes
@@ -310,6 +353,7 @@ function runWalletCommand(command: string): Promise<string> {
     // Pass through Python-specific vars if set
     if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
+    if (process.env.TONKL_RPC_SECRET) safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
 
     const child = spawn(PYTHON, args, {
       stdio: ["ignore", "pipe", "pipe"] as const,

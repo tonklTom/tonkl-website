@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { tonklSessionHeaders } from "@/lib/client-session";
 
 type FaucetStatus = "idle" | "loading" | "success" | "error";
 
@@ -38,7 +39,7 @@ export default function FaucetPage() {
       try {
         const resp = await fetch("/api/faucet", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
           body: JSON.stringify({ address: trimmed }),
         });
 
