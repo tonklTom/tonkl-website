@@ -244,7 +244,7 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
               <span className="font-medium text-white/90">Faucet</span>
             </button>
             <button
-              onClick={() => window.dispatchEvent(new CustomEvent('open-shlem'))}
+              onClick={() => window.dispatchEvent(new CustomEvent('open-tonkl-ai'))}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
               <Coins className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform" />

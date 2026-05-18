@@ -276,7 +276,7 @@ interface PromptInputBoxProps {
   className?: string;
 }
 export const PromptInputBox = React.forwardRef((props: PromptInputBoxProps, ref: React.Ref<HTMLDivElement>) => {
-  const { onSend = () => {}, isLoading = false, placeholder = "Message Shlem AI...", className } = props;
+  const { onSend = () => {}, isLoading = false, placeholder = "Message Tonkl AI...", className } = props;
   const [input, setInput] = React.useState("");
 
   const handleSubmit = () => {

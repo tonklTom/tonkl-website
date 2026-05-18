@@ -1,10 +1,10 @@
-# Tonkl Website and Shlem Security Risk Register
+# Tonkl Website and Tonkl AI Security Risk Register
 
 Date: 2026-05-11
 
 Scope:
-- `tonkl-website`: Next.js app, wallet API routes, Shlem API route, local wallet command bridge
-- Shlem integration points used by the website
+- `tonkl-website`: Next.js app, wallet API routes, Tonkl AI API route, local wallet command bridge
+- Tonkl AI integration points used by the website
 - Cross-repo references where protocol/node behavior affects website safety
 
 This register tracks the risks still open after the May 2026 hardening pass. It is written so each item can become a GitHub issue.
@@ -27,23 +27,23 @@ This register tracks the risks still open after the May 2026 hardening pass. It 
 | RESOLVED-003 | Fixed | Wallet CLI JSON outputs used by the website no longer return private scan/spending/authority keys. |
 | RESOLVED-004 | Fixed | API route subprocess stdout/stderr pipe guards were added to prevent runtime crashes when streams are unavailable. |
 | RESOLVED-005 | Validated | Targeted API route ESLint and TypeScript checks passed after the subprocess guard fixes. |
-| RESOLVED-006 | Fixed | Wallet API and wallet-aware Shlem access now require a valid app session before exposing wallet metadata or wallet connector context. |
-| RESOLVED-007 | Fixed | Shlem now applies deterministic secret-shape redaction before hosted model prompts, session memory, and learning capture. |
+| RESOLVED-006 | Fixed | Wallet API and wallet-aware Tonkl AI access now require a valid app session before exposing wallet metadata or wallet connector context. |
+| RESOLVED-007 | Fixed | Tonkl AI now applies deterministic secret-shape redaction before hosted model prompts, session memory, and learning capture. |
 
 ## Open Risks
 
 | ID | Severity | Area | Status | Suggested GitHub Issue |
 | --- | --- | --- | --- | --- |
-| TONKL-WEB-001 | P1 High | Wallet API auth | Fixed 2026-05-16 | Session-gate wallet and Shlem routes that can access wallet state |
-| TONKL-WEB-002 | P1 High | Shlem cloud redaction | Fixed 2026-05-16 | Add deterministic secret-shape redaction before any hosted model call |
+| TONKL-WEB-001 | P1 High | Wallet API auth | Fixed 2026-05-16 | Session-gate wallet and Tonkl AI routes that can access wallet state |
+| TONKL-WEB-002 | P1 High | Tonkl AI cloud redaction | Fixed 2026-05-16 | Add deterministic secret-shape redaction before any hosted model call |
 | TONKL-WEB-003 | P1 High | Wallet CLI secret args | Open | Remove website dependence on any remaining secret-bearing wallet CLI flags |
 | TONKL-WEB-004 | P2 Medium | Session security | Open | Replace sessionStorage bearer token with stronger session handling |
-| TONKL-WEB-005 | P2 Medium | Shlem prompt injection | Open | Treat external knowledge as untrusted data in Shlem prompts |
+| TONKL-WEB-005 | P2 Medium | Tonkl AI prompt injection | Open | Treat external knowledge as untrusted data in Tonkl AI prompts |
 | TONKL-WEB-006 | P2 Medium | Public node proxy reads | Open | Decide and enforce public vs wallet-sensitive read API policy |
 | TONKL-WEB-007 | P2 Medium | CI readiness | Open | Fix remaining full lint failures before beta gating |
-| TONKL-WEB-008 | P3 Low | Shlem repo tracking | Open | Put Shlem in a git repo or vendor it into a tracked repo |
+| TONKL-WEB-008 | P3 Low | Tonkl AI repo tracking | Open | Put Tonkl AI in a git repo or vendor it into a tracked repo |
 
-## TONKL-WEB-001: Wallet and Shlem read APIs are not session-gated
+## TONKL-WEB-001: Wallet and Tonkl AI read APIs are not session-gated
 
 Severity: P1 High
 
@@ -51,8 +51,8 @@ Status: Fixed 2026-05-16
 
 Evidence:
 - `src/app/api/wallet/route.ts` now requires a valid app session before returning local wallet summaries or read command output.
-- `src/app/api/shlem/route.ts` now blocks wallet-sensitive prompts without a session and only passes wallet command context to Shlem after session validation.
-- Wallet UI callers now include `X-Tonkl-Session` for wallet summary, receive address, faucet address lookup, and Shlem wallet-aware requests.
+- `src/app/api/tonkl-ai/route.ts` now blocks wallet-sensitive prompts without a session and only passes wallet command context to Tonkl AI after session validation.
+- Wallet UI callers now include `X-Tonkl-Session` for wallet summary, receive address, faucet address lookup, and Tonkl AI wallet-aware requests.
 
 Impact:
 - A process or web page able to reach the local app can query wallet state through the local website API.
@@ -60,29 +60,29 @@ Impact:
 
 Recommendation:
 - Require a valid session for wallet routes.
-- Require a valid session for Shlem whenever wallet or node connector context is enabled.
-- Allow unauthenticated Shlem only for pure public/help mode with no wallet command configured.
+- Require a valid session for Tonkl AI whenever wallet or node connector context is enabled.
+- Allow unauthenticated Tonkl AI only for pure public/help mode with no wallet command configured.
 
 Acceptance criteria:
 - Unauthenticated calls to wallet summary return 401.
-- Shlem wallet-aware calls return 401 without session.
-- Public help-only Shlem mode is explicitly separated from wallet-aware mode.
+- Tonkl AI wallet-aware calls return 401 without session.
+- Public help-only Tonkl AI mode is explicitly separated from wallet-aware mode.
 - Security tests assert unauthenticated wallet and faucet calls are rejected before connector execution.
 
-## TONKL-WEB-002: Shlem cloud model redaction is keyword-based, not secret-shape based
+## TONKL-WEB-002: Tonkl AI cloud model redaction is keyword-based, not secret-shape based
 
 Severity: P1 High
 
 Status: Fixed 2026-05-16
 
 Evidence:
-- Shlem now redacts model input and JSON context using deterministic secret-shape checks.
+- Tonkl AI now redacts model input and JSON context using deterministic secret-shape checks.
 - Covered shapes include BIP-39-like mnemonic word counts, raw 32-byte hex strings with or without `0x`, passphrase assignments, and secret-shaped JSON keys.
 - The same redaction helpers are also used before session memory and learning capture.
 
 Impact:
 - User secrets could be sent to a hosted Llama provider during fallback/model generation.
-- This is especially risky because Shlem is a wallet assistant and users may paste recovery material while asking for help.
+- This is especially risky because Tonkl AI is a wallet assistant and users may paste recovery material while asking for help.
 
 Recommendation:
 - Add deterministic pre-model scanning for:
@@ -140,12 +140,12 @@ Acceptance criteria:
 - Wallet API routes authenticate through HttpOnly cookie or equivalent server-owned token.
 - Logout invalidates server-side session immediately.
 
-## TONKL-WEB-005: Shlem external knowledge can become prompt-injection input
+## TONKL-WEB-005: Tonkl AI external knowledge can become prompt-injection input
 
 Severity: P2 Medium
 
 Evidence:
-- Shlem can fetch curated web knowledge and inject it into the prompt context.
+- Tonkl AI can fetch curated web knowledge and inject it into the prompt context.
 - External data, even from curated APIs, can include names/descriptions that look like instructions.
 
 Impact:
@@ -198,37 +198,37 @@ Acceptance criteria:
 - `npm run lint` exits 0.
 - `npx tsc --noEmit` exits 0.
 
-## TONKL-WEB-008: Shlem is not currently tracked in git
+## TONKL-WEB-008: Tonkl AI is not currently tracked in git
 
 Severity: P3 Low
 
 Evidence:
-- `/Users/ashleycole/Desktop/Shlem` is not a git repository.
+- `/Users/ashleycole/Desktop/tonkl-ai` is not a git repository.
 
 Impact:
-- Shlem fixes and audit notes cannot be pushed unless Shlem is moved into a repo, added as a submodule, or copied into a tracked project.
+- Tonkl AI fixes and audit notes cannot be pushed unless Tonkl AI is moved into a repo, added as a submodule, or copied into a tracked project.
 
 Recommendation:
-- Decide whether Shlem should be:
-  - a standalone `tonkl-shlem` repo,
+- Decide whether Tonkl AI should be:
+  - a standalone `tonkl-ai` repo,
   - a package inside `tonkl-website`,
   - or a package inside `tonkl-protocol`.
 
 Acceptance criteria:
-- Shlem source and tests are tracked in GitHub before beta.
+- Tonkl AI source and tests are tracked in GitHub before beta.
 
 ## Suggested GitHub Issue Split
 
 Create these issues in `tonklTom/tonkl-website`:
 
-1. `[P1] Session-gate wallet and wallet-aware Shlem API routes`
-2. `[P1] Add deterministic secret-shape redaction before Shlem model calls`
+1. `[P1] Session-gate wallet and wallet-aware Tonkl AI API routes`
+2. `[P1] Add deterministic secret-shape redaction before Tonkl AI model calls`
 3. `[P1] Add website guards against secret-bearing wallet CLI argv`
 4. `[P2] Move app sessions away from sessionStorage bearer tokens`
-5. `[P2] Treat Shlem external knowledge as untrusted prompt data`
+5. `[P2] Treat Tonkl AI external knowledge as untrusted prompt data`
 6. `[P2] Define public vs wallet-sensitive node proxy reads`
 7. `[P2] Fix full lint before beta CI gating`
-8. `[P3] Put Shlem source under GitHub tracking`
+8. `[P3] Put Tonkl AI source under GitHub tracking`
 
 ## Recheck Commands
 
@@ -238,5 +238,5 @@ Recommended local checks after fixes:
 cd ~/Desktop/tonkl-website
 npm run lint
 npx tsc --noEmit
-rg "--to-sk|--from-sk|--authority-sk|--recipient-sk|--passphrase|spending_sk|authority_sk|sessionStorage|SHLEM_WALLET_CMD" src tests
+rg "--to-sk|--from-sk|--authority-sk|--recipient-sk|--passphrase|spending_sk|authority_sk|sessionStorage|TONKL_AI_WALLET_CMD" src tests
 ```

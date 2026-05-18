@@ -106,9 +106,9 @@ const CATEGORY_DESCRIPTIONS: Record<TokenCategory, string> = {
 
 // ─── Component ──────────────────────────────────────────────────
 
-type CreateMode = "form" | "shlem";
+type CreateMode = "form" | "tonklAi";
 
-type ShlemMessage = {
+type TonklAIMessage = {
   id: string;
   text: string;
   isUser: boolean;
@@ -127,14 +127,14 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
   const [createdToken, setCreatedToken] = useState<CreatedToken | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Shlem chat state
-  const [shlemMessages, setShlemMessages] = useState<ShlemMessage[]>([
+  // Tonkl AI chat state
+  const [tonklAiMessages, setTonklAIMessages] = useState<TonklAIMessage[]>([
     { id: "welcome", text: "Tell me about the token you want to create. For example: \"I want to create a community token called VIBE with 10 million supply\" — and I'll handle the rest.", isUser: false },
   ]);
-  const [shlemInput, setShlemInput] = useState("");
-  const [shlemLoading, setShlemLoading] = useState(false);
-  const shlemChatRef = useRef<HTMLDivElement>(null);
-  const shlemInputRef = useRef<HTMLInputElement>(null);
+  const [tonklAiInput, setTonklAIInput] = useState("");
+  const [tonklAiLoading, setTonklAILoading] = useState(false);
+  const tonklAiChatRef = useRef<HTMLDivElement>(null);
+  const tonklAiInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState<TokenFormData>({
     symbol: "",
@@ -183,35 +183,35 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
     reader.readAsDataURL(file);
   };
 
-  // ── Shlem chat auto-scroll ──────────────────────────────────
+  // ── Tonkl AI chat auto-scroll ──────────────────────────────────
 
   useEffect(() => {
-    if (shlemChatRef.current) {
-      shlemChatRef.current.scrollTop = shlemChatRef.current.scrollHeight;
+    if (tonklAiChatRef.current) {
+      tonklAiChatRef.current.scrollTop = tonklAiChatRef.current.scrollHeight;
     }
-  }, [shlemMessages]);
+  }, [tonklAiMessages]);
 
-  // ── Shlem message handler ──────────────────────────────────
+  // ── Tonkl AI message handler ──────────────────────────────────
 
-  const sendShlemMessage = async () => {
-    const text = shlemInput.trim();
-    if (!text || shlemLoading) return;
+  const sendTonklAIMessage = async () => {
+    const text = tonklAiInput.trim();
+    if (!text || tonklAiLoading) return;
 
-    const userMsg: ShlemMessage = { id: `u-${Date.now()}`, text: maskSecretText(text).text, isUser: true };
-    const loadingMsg: ShlemMessage = { id: `l-${Date.now()}`, text: "", isUser: false, isLoading: true };
-    setShlemMessages((prev) => [...prev, userMsg, loadingMsg]);
-    setShlemInput("");
-    setShlemLoading(true);
+    const userMsg: TonklAIMessage = { id: `u-${Date.now()}`, text: maskSecretText(text).text, isUser: true };
+    const loadingMsg: TonklAIMessage = { id: `l-${Date.now()}`, text: "", isUser: false, isLoading: true };
+    setTonklAIMessages((prev) => [...prev, userMsg, loadingMsg]);
+    setTonklAIInput("");
+    setTonklAILoading(true);
 
     try {
-      const resp = await fetch("/api/shlem", {
+      const resp = await fetch("/api/tonkl-ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
           context: "token_creation",
           currentForm: form,
-          history: shlemMessages
+          history: tonklAiMessages
             .filter((m) => !m.isLoading)
             .slice(-10)
             .map((m) => ({ role: m.isUser ? "user" : "assistant", content: m.text })),
@@ -221,7 +221,7 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
       const data = await resp.json();
       const reply = maskSecretText(data.reply || "I didn't catch that. Could you describe your token again?").text;
 
-      // Check if Shlem extracted any token fields
+      // Check if Tonkl AI extracted any token fields
       const extracted: Partial<TokenFormData> = {};
       if (data.payload?.execution?.data?.extracted_fields) {
         const fields = data.payload.execution.data.extracted_fields;
@@ -240,7 +240,7 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
 
       const hasExtracted = Object.keys(extracted).length > 0;
 
-      setShlemMessages((prev) => [
+      setTonklAIMessages((prev) => [
         ...prev.filter((m) => !m.isLoading),
         {
           id: `s-${Date.now()}`,
@@ -250,12 +250,12 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
         },
       ]);
     } catch {
-      setShlemMessages((prev) => [
+      setTonklAIMessages((prev) => [
         ...prev.filter((m) => !m.isLoading),
-        { id: `e-${Date.now()}`, text: "Could not reach Shlem. Make sure the service is running.", isUser: false },
+        { id: `e-${Date.now()}`, text: "Could not reach Tonkl AI. Make sure the service is running.", isUser: false },
       ]);
     } finally {
-      setShlemLoading(false);
+      setTonklAILoading(false);
     }
   };
 
@@ -376,14 +376,14 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
               <Pencil className="w-3 h-3" /> Form
             </button>
             <button
-              onClick={() => setMode("shlem")}
+              onClick={() => setMode("tonklAi")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                mode === "shlem"
+                mode === "tonklAi"
                   ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
                   : "text-white/40 hover:text-white/60"
               }`}
             >
-              <Bot className="w-3 h-3" /> Shlem
+              <Bot className="w-3 h-3" /> Tonkl AI
             </button>
           </div>
           {/* Completeness ring */}
@@ -402,12 +402,12 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      {/* Shlem chat mode */}
-      {mode === "shlem" && (
+      {/* Tonkl AI chat mode */}
+      {mode === "tonklAi" && (
         <div className="flex-1 flex flex-col px-6 pb-4 overflow-hidden">
           {/* Chat area */}
-          <div ref={shlemChatRef} className="flex-1 overflow-y-auto space-y-4 pb-4 scrollbar-thin scrollbar-thumb-white/10">
-            {shlemMessages.map((msg) => (
+          <div ref={tonklAiChatRef} className="flex-1 overflow-y-auto space-y-4 pb-4 scrollbar-thin scrollbar-thumb-white/10">
+            {tonklAiMessages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.isUser ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${
                   msg.isUser
@@ -417,14 +417,14 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
                   {msg.isLoading ? (
                     <div className="flex items-center gap-2 text-purple-400">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">Shlem is thinking...</span>
+                      <span className="text-sm">Tonkl AI is thinking...</span>
                     </div>
                   ) : (
                     <>
                       {!msg.isUser && (
                         <div className="flex items-center gap-1.5 mb-1.5">
                           <Bot className="w-3.5 h-3.5 text-purple-400" />
-                          <span className="text-[10px] text-purple-400/70 font-medium uppercase tracking-wider">Shlem</span>
+                          <span className="text-[10px] text-purple-400/70 font-medium uppercase tracking-wider">Tonkl AI</span>
                         </div>
                       )}
                       <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
@@ -472,18 +472,18 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
           {/* Input */}
           <div className="flex gap-2">
             <input
-              ref={shlemInputRef}
+              ref={tonklAiInputRef}
               type="text"
-              value={shlemInput}
-              onChange={(e) => setShlemInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendShlemMessage()}
-              placeholder="Describe your token to Shlem..."
-              disabled={shlemLoading}
+              value={tonklAiInput}
+              onChange={(e) => setTonklAIInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && sendTonklAIMessage()}
+              placeholder="Describe your token to Tonkl AI..."
+              disabled={tonklAiLoading}
               className="flex-1 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/20 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 disabled:opacity-50"
             />
             <button
-              onClick={sendShlemMessage}
-              disabled={shlemLoading || !shlemInput.trim()}
+              onClick={sendTonklAIMessage}
+              disabled={tonklAiLoading || !tonklAiInput.trim()}
               className="px-4 py-3 bg-purple-500 disabled:bg-white/10 text-white disabled:text-white/30 rounded-xl hover:bg-purple-400 transition-colors"
             >
               <SendHorizontal className="w-5 h-5" />
@@ -836,11 +836,11 @@ export function CreateToken({ onBack }: { onBack: () => void }) {
                 </div>
               </div>
 
-              {/* Shlem Risk Assessment Preview */}
+              {/* Tonkl AI Risk Assessment Preview */}
               <div className="p-4 rounded-xl bg-white/5 border border-white/10">
                 <div className="flex items-center gap-2 mb-3">
                   <Shield className="w-4 h-4 text-cyan-400" />
-                  <span className="text-sm text-white/70 font-medium">Shlem Risk Assessment</span>
+                  <span className="text-sm text-white/70 font-medium">Tonkl AI Risk Assessment</span>
                 </div>
                 <div className="space-y-2">
                   {completeness === 100 ? (

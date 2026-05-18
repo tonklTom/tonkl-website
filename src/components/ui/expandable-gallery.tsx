@@ -27,12 +27,12 @@ const CARDS = [
   },
   {
     id: "card-3",
-    title: "Shlem Ai",
+    title: "Tonkl AI",
     icon: Bot,
     rotation: -2,
     x: -40,
     y: -5,
-    image: "/shlem-ai.jpg"
+    image: "/tonkl-ai.jpg"
   },
   {
     id: "card-4",

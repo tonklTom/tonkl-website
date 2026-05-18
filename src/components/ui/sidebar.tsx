@@ -5,9 +5,9 @@ import Link from "next/link";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Avatar from "@radix-ui/react-avatar";
 import { Wallet, HardHat, Coins, MessageSquareLock, FileText, Settings, HelpCircle, LogOut, Newspaper, Dice1, Dice2, Dice3, Dice4, Dice5, Dice6, Dices, Send, ArrowDownToLine, Droplet, History, ScrollText, Pickaxe, Search } from "lucide-react";
-import { ShlemChatOverlay } from "@/components/ui/shlem-chat-overlay";
+import { TonklAIChatOverlay } from "@/components/ui/tonkl-ai-chat-overlay";
 
-const SpartanShlemetIcon = ({ className }: { className?: string }) => (
+const TonklAIIcon = ({ className }: { className?: string }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     viewBox="0 0 24 24"
@@ -21,7 +21,7 @@ const SpartanShlemetIcon = ({ className }: { className?: string }) => (
     {/* Crest Plume */}
     <path d="M4 8C2 2 12 1 15 2c5 2 8 7 7 15-2-3-5-7-9-8-4-1-7-1-9-1z" />
     
-    {/* Shlemet Body */}
+    {/* Assistant icon body */}
     <path d="M7 8c5 0 9 1 12 6l-1 4-4-2-3 0-2 5-2-5 1-3-5 0 2-3 2-2z" />
     
     {/* Inner crest detailing lines */}
@@ -161,12 +161,12 @@ const Real3DDiceButton = () => {
 };
 
 const Sidebar = () => {
-  const [isShlemOpen, setIsShlemOpen] = useState(false);
+  const [isTonklAIOpen, setIsTonklAIOpen] = useState(false);
 
   useEffect(() => {
-    const handleOpenShlem = () => setIsShlemOpen(true);
-    window.addEventListener('open-shlem', handleOpenShlem);
-    return () => window.removeEventListener('open-shlem', handleOpenShlem);
+    const handleOpenTonklAI = () => setIsTonklAIOpen(true);
+    window.addEventListener('open-tonkl-ai', handleOpenTonklAI);
+    return () => window.removeEventListener('open-tonkl-ai', handleOpenTonklAI);
   }, []);
 
   const navigation = [
@@ -175,15 +175,15 @@ const Sidebar = () => {
       name: "Wallet",
       icon: <Wallet className="w-5 h-5" />,
       action: () => {
-        setIsShlemOpen(false);
+        setIsTonklAIOpen(false);
         window.location.hash = "#wallet";
       }
     },
     {
       href: "javascript:void(0)",
-      name: "Shlem AI",
-      icon: <SpartanShlemetIcon className="w-5 h-5" />,
-      action: () => setIsShlemOpen(true)
+      name: "Tonkl AI",
+      icon: <TonklAIIcon className="w-5 h-5" />,
+      action: () => setIsTonklAIOpen(true)
     },
     {
       href: "javascript:void(0)",
@@ -195,7 +195,7 @@ const Sidebar = () => {
       name: "News",
       icon: <Newspaper className="w-5 h-5" />,
       action: () => {
-        setIsShlemOpen(false);
+        setIsTonklAIOpen(false);
         window.location.hash = "#news";
       }
     },
@@ -322,8 +322,8 @@ const Sidebar = () => {
         </div>
       </div>
       
-      {/* Global Shlem Chat Overlay rendering from Sidebar root */}
-      <ShlemChatOverlay isOpen={isShlemOpen} onClose={() => setIsShlemOpen(false)} />
+      {/* Global Tonkl AI Chat Overlay rendering from Sidebar root */}
+      <TonklAIChatOverlay isOpen={isTonklAIOpen} onClose={() => setIsTonklAIOpen(false)} />
     </nav>
   );
 };

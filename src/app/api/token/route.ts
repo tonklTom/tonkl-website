@@ -70,7 +70,7 @@ type TokenCreateRequest = {
   echoRate?: number;     // 0-1000 basis points to echo recipient
   echoRecipient?: string; // pk_x of echo destination
   supplyCap?: number;    // 0 = uncapped
-  // Shlem assessment (added server-side)
+  // Tonkl AI assessment (added server-side)
 };
 
 type TokenMintRequest = {

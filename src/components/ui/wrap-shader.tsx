@@ -61,10 +61,10 @@ export default function WarpShaderHero({ onLaunchWallet }: { onLaunchWallet?: ()
               Launch Wallet
             </button>
             <button 
-              onClick={() => window.dispatchEvent(new CustomEvent('open-shlem'))}
+              onClick={() => window.dispatchEvent(new CustomEvent('open-tonkl-ai'))}
               className="flex items-center gap-2 px-10 py-4 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-white/80 font-medium hover:bg-white/10 hover:text-white transition-all duration-300"
             >
-              Ask Shlem
+              Ask Tonkl AI
             </button>
           </div>
         </div>

@@ -61,9 +61,9 @@ type MessageKind =
   | "token_error"
   | "preview";
 
-type ShlemModelStatus = "connected" | "fallback" | "disabled" | "skipped_blocked" | "unknown";
+type TonklAIModelStatus = "connected" | "fallback" | "disabled" | "skipped_blocked" | "unknown";
 
-type ShlemPreview = {
+type TonklAIPreview = {
   preview_id: string;
   action: string;
   title: string;
@@ -79,9 +79,9 @@ type ChatMessage = {
   text: string;
   isUser: boolean;
   kind?: MessageKind;
-  preview?: ShlemPreview | null;
+  preview?: TonklAIPreview | null;
   executionEnabled?: boolean;
-  modelStatus?: ShlemModelStatus;
+  modelStatus?: TonklAIModelStatus;
   modelName?: string | null;
   tokenForm?: Partial<TokenFormData>;
   createdToken?: CreatedToken;
@@ -89,12 +89,12 @@ type ChatMessage = {
   extractedFields?: Partial<TokenFormData>;
 };
 
-type ShlemApiResponse = {
+type TonklAIApiResponse = {
   reply?: string;
   kind?: string;
-  preview?: ShlemPreview | null;
+  preview?: TonklAIPreview | null;
   executionEnabled?: boolean;
-  modelStatus?: ShlemModelStatus;
+  modelStatus?: TonklAIModelStatus;
   modelName?: string | null;
   payload?: {
     intent?: string;
@@ -127,27 +127,28 @@ const DEFAULT_FORM: TokenFormData = {
 
 // ─── Component ─────────────────────────────────────────────────
 
-interface ShlemChatOverlayProps {
+interface TonklAIChatOverlayProps {
   isOpen?: boolean;
   onClose?: () => void;
   embedded?: boolean;
 }
 
-export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemChatOverlayProps) {
+export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklAIChatOverlayProps) {
   const [isFullscreen, setIsFullscreen] = useState(embedded ? true : true);
   const [isVoiceMode, setIsVoiceMode] = useState(false);
-  const [isShlemSpeaking, setIsShlemSpeaking] = useState(false);
+  const [isTonklAISpeaking, setIsTonklAISpeaking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [cancelledPreviewIds, setCancelledPreviewIds] = useState<Set<string>>(() => new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const [tokenForm, setTokenForm] = useState<TokenFormData>({ ...DEFAULT_FORM });
   const [isCreatingToken, setIsCreatingToken] = useState(false);
+  const [tokenFlowActive, setTokenFlowActive] = useState(false);
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
-      text: "I am Shlem, your encrypted assistant for the Tonkl network. I can check balances, prepare sends, create tokens, scan notes, and more. Just tell me what you need.",
+      text: "I am Tonkl AI, your encrypted assistant for the Tonkl network. I can check balances, prepare sends, create tokens, scan notes, and more. Just tell me what you need.",
       isUser: false,
     },
   ]);
@@ -160,8 +161,8 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
     let t1: NodeJS.Timeout;
     let t2: NodeJS.Timeout;
     if (isVoiceMode) {
-      t1 = setTimeout(() => setIsShlemSpeaking(true), 2000);
-      t2 = setTimeout(() => setIsShlemSpeaking(false), 6000);
+      t1 = setTimeout(() => setIsTonklAISpeaking(true), 2000);
+      t2 = setTimeout(() => setIsTonklAISpeaking(false), 6000);
     }
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [isVoiceMode]);
@@ -181,8 +182,30 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
     // If the user is clearly exiting, reset and return false
     if (currentMessage && isExitingTokenContext(currentMessage)) {
       setTokenForm({ ...DEFAULT_FORM });
+      setTokenFlowActive(false);
       return false;
     }
+
+    // If the guided flow is already active, stay in token context
+    if (tokenFlowActive) return true;
+
+    // Detect initial token creation intent from the current message
+    if (currentMessage) {
+      const lower = currentMessage.toLowerCase();
+      const intentPatterns = [
+        /\b(?:create|make|mint|launch|deploy|start|build|set\s*up)\s+(?:a\s+)?(?:new\s+)?token\b/,
+        /\b(?:i\s+want|i(?:'d|\s+would)\s+like|let(?:'s|\s+us)|can\s+(?:i|we|you))\s+(?:create|make|mint|launch|deploy)\s+(?:a\s+)?token\b/,
+        /\btoken\s+creation\b/,
+        /\bnew\s+token\b/,
+        /\bcreate\s+(?:a\s+)?coin\b/,
+      ];
+      if (intentPatterns.some((p) => p.test(lower))) {
+        setTokenFlowActive(true);
+        return true;
+      }
+    }
+
+    // Existing checks: recent messages contain token-related activity
     const recent = messages.slice(-6);
     return recent.some(
       (m) =>
@@ -265,6 +288,7 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
         },
       ]);
       setTokenForm({ ...DEFAULT_FORM });
+      setTokenFlowActive(false);
     } catch {
       setMessages((prev) => prev.filter((m) => m.id !== creatingId));
       setMessages((prev) => [
@@ -300,7 +324,7 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
 
     try {
       const context = isTokenContext(trimmedText) ? "token_creation" : undefined;
-      const response = await fetch("/api/shlem", {
+      const response = await fetch("/api/tonkl-ai", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...tonklSessionHeaders() },
         body: JSON.stringify({
@@ -311,8 +335,8 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
         }),
       });
 
-      const data = (await response.json().catch(() => null)) as ShlemApiResponse | null;
-      const reply = maskSecretText(data?.reply || "I could not read the Shlem response.").text;
+      const data = (await response.json().catch(() => null)) as TonklAIApiResponse | null;
+      const reply = maskSecretText(data?.reply || "I could not read the Tonkl AI response.").text;
 
       const extracted = data?.payload?.execution?.data?.extracted_fields;
       if (extracted && Object.keys(extracted).length > 0) {
@@ -325,6 +349,11 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
         data?.payload?.intent === "create_token" ||
         data?.payload?.intent === "update_token_creation" ||
         (context === "token_creation" && extracted && Object.keys(extracted).length > 0);
+
+      // Activate the guided token flow when the API confirms token creation intent
+      if (data?.payload?.intent === "create_token" || data?.payload?.intent === "update_token_creation") {
+        setTokenFlowActive(true);
+      }
 
       if (isTokenIntent && hasEnoughForPreview) {
         setMessages((prev) => [
@@ -361,7 +390,7 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
         ...prev,
         {
           id: createMessageId(),
-          text: "I could not reach the local Shlem route. Check that the Next dev server is running.",
+          text: "I could not reach the local Tonkl AI route. Check that the Next dev server is running.",
           isUser: false,
           kind: "error",
         },
@@ -479,7 +508,7 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
                   {isLoading && (
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
                       <div className="max-w-[80%] rounded-[24px] rounded-bl-sm px-5 py-3.5 bg-white/90 backdrop-blur-xl text-black border border-white/20 shadow-md">
-                        <p className={`${isFullscreen ? "text-lg" : "text-sm"} animate-pulse`}>Shlem is thinking...</p>
+                        <p className={`${isFullscreen ? "text-lg" : "text-sm"} animate-pulse`}>Tonkl AI is thinking...</p>
                       </div>
                     </motion.div>
                   )}
@@ -490,12 +519,12 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
                   key="voice" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}
                   className="flex-1 flex flex-col items-center justify-center p-4 relative"
                 >
-                  <SiriOrb isSpeaking={isShlemSpeaking} size={isFullscreen ? "400px" : "250px"} />
+                  <SiriOrb isSpeaking={isTonklAISpeaking} size={isFullscreen ? "400px" : "250px"} />
                   <p className="mt-8 text-cyan-400/70 font-mono text-sm animate-pulse">
-                    {isShlemSpeaking ? "Shlem AI is speaking..." : "Listening to your voice..."}
+                    {isTonklAISpeaking ? "Tonkl AI is speaking..." : "Listening to your voice..."}
                   </p>
                   <button
-                    onClick={() => { setIsVoiceMode(false); setIsShlemSpeaking(false); }}
+                    onClick={() => { setIsVoiceMode(false); setIsTonklAISpeaking(false); }}
                     className="mt-8 px-6 py-2 rounded-full border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
                   >
                     End Voice Mode
@@ -513,7 +542,7 @@ export function ShlemChatOverlay({ isOpen, onClose, embedded = false }: ShlemCha
                 >
                   <PromptInputBox
                     onSend={(msg) => handleSend(msg)}
-                    onVoiceModeToggle={(active) => { setIsVoiceMode(active); if (!active) setIsShlemSpeaking(false); }}
+                    onVoiceModeToggle={(active) => { setIsVoiceMode(active); if (!active) setIsTonklAISpeaking(false); }}
                     isLoading={isLoading}
                   />
                 </motion.div>
@@ -809,7 +838,7 @@ function ExtractedFieldsBadge({ fields }: { fields: Partial<TokenFormData> }) {
 // ─── Generic Preview Card ──────────────────────────────────────
 
 function GenericPreviewCard({ preview, executionEnabled, isCancelled, onCancel }: {
-  preview: ShlemPreview; executionEnabled: boolean; isCancelled: boolean; onCancel: () => void;
+  preview: TonklAIPreview; executionEnabled: boolean; isCancelled: boolean; onCancel: () => void;
 }) {
   return (
     <div className="mt-4 overflow-hidden rounded-lg border border-cyan-300/20 bg-black/35">
@@ -899,7 +928,7 @@ function assistantBubbleClass(kind?: MessageKind) {
   return "bg-white/90 backdrop-blur-xl text-black shadow-md border border-white/20 rounded-bl-sm";
 }
 
-function formatModelStatus(status: ShlemModelStatus, modelName?: string | null) {
+function formatModelStatus(status: TonklAIModelStatus, modelName?: string | null) {
   if (status === "connected") return modelName ? `${modelName}` : "Model connected";
   if (status === "fallback") return "Fallback mode";
   if (status === "disabled") return "Model disabled";
