@@ -183,7 +183,15 @@ const Sidebar = () => {
       href: "javascript:void(0)",
       name: "Tonkl AI",
       icon: <TonklAIIcon className="w-5 h-5" />,
-      action: () => setIsTonklAIOpen(true)
+      action: () => {
+        setIsTonklAIOpen(false);
+        if (window.location.hash !== "" && window.location.hash !== "#home") {
+          window.location.hash = "#home";
+        }
+        setTimeout(() => {
+          document.getElementById('tonkl-ai-chat-section')?.scrollIntoView({ behavior: 'smooth' });
+        }, 50);
+      }
     },
     {
       href: "javascript:void(0)",
@@ -228,7 +236,10 @@ const Sidebar = () => {
     <nav className="fixed top-0 left-0 w-20 h-full border-r border-white/5 bg-[#020202] flex flex-col z-50">
         <div className="flex items-center justify-center pt-8 pb-4">
           <button 
-            onClick={() => window.location.href = '/'}
+            onClick={() => {
+              window.location.hash = "#home";
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className="flex items-center justify-center hover:scale-110 transition-transform duration-300 group"
           >
             {/* The user's uploaded logo. */}
@@ -261,7 +272,6 @@ const Sidebar = () => {
 
         <div>
           <ul className="px-4 pb-6 space-y-4">
-            <Real3DDiceButton />
             {navsFooter.map((item, idx) => (
               <li key={idx}>
                 <a

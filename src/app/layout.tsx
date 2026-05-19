@@ -28,11 +28,8 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-row bg-[#020202] text-white selection:bg-cyan-500/30">
-        <Sidebar />
-        <div className="pl-20 flex-1 flex flex-col min-w-0">
-          {children}
-        </div>
+      <body className="min-h-full bg-[#020202] text-white selection:bg-cyan-500/30">
+        {children}
       </body>
     </html>
   );

@@ -4,7 +4,7 @@ import { validateSession } from "@/lib/session";
 
 export const runtime = "nodejs";
 
-const DEFAULT_TONKL_AI_DIR = process.env.TONKL_AI_DIR || "/Users/ashleycole/Desktop/tonkl-ai";
+const DEFAULT_TONKL_AI_DIR = process.env.TONKL_AI_DIR || "";
 const DEFAULT_NODE_URL = "http://127.0.0.1:9100";
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_TURNS = 12;

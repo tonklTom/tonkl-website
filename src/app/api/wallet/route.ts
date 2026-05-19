@@ -21,7 +21,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
-import { requireSession } from "@/lib/session";
+import { requireSession, getSessionPassphrase } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -71,6 +71,8 @@ export async function GET(request: Request) {
   const authFailed = requireSession(request);
   if (authFailed) return authFailed;
 
+  const passphrase = getSessionPassphrase(request);
+
   // If wallet script isn't configured, return read-only node data only
   if (!WALLET_SCRIPT) {
     const nodeStatus = await fetchNodeStatus();
@@ -86,7 +88,7 @@ export async function GET(request: Request) {
 
     let walletData: WalletSummary | null = null;
     try {
-      walletData = await getWalletSummary();
+      walletData = await getWalletSummary(passphrase);
     } catch {
       // Wallet may not be configured — that's okay
     }
@@ -117,6 +119,8 @@ export async function POST(request: Request) {
 
   const authFailed = requireSession(request);
   if (authFailed) return authFailed;
+
+  const passphrase = getSessionPassphrase(request);
 
   // ── Body size check ─────────────────────────────────────────
   const contentLength = request.headers.get("content-length");
@@ -168,11 +172,11 @@ export async function POST(request: Request) {
   // ── Execute ─────────────────────────────────────────────────
   try {
     if (command === "address") {
-      const output = await getPublicAddressOutput();
+      const output = await getPublicAddressOutput(passphrase);
       return Response.json({ command, output });
     }
 
-    const output = await runWalletCommand(command);
+    const output = await runWalletCommand(command, passphrase);
     return Response.json({ command, output: redactWalletOutput(output) });
   } catch {
     // SECURITY: Never forward internal error details (stderr, file paths, etc.)
@@ -224,15 +228,15 @@ async function fetchNodeStatus(): Promise<Record<string, unknown> | null> {
   }
 }
 
-async function getWalletSummary(): Promise<WalletSummary> {
+async function getWalletSummary(passphrase?: string): Promise<WalletSummary> {
   // Scan for incoming notes before checking balance
   try {
-    await runWalletCommand("scan");
+    await runWalletCommand("scan", passphrase);
   } catch {
     // Scan might fail if no scan keys registered — that's okay
   }
 
-  const balanceOutput = await runWalletCommand("balance");
+  const balanceOutput = await runWalletCommand("balance", passphrase);
 
   let totalRaw = 0;
   const assets: AssetBalance[] = [];
@@ -278,7 +282,7 @@ async function getWalletSummary(): Promise<WalletSummary> {
 
   let noteCount = 0;
   try {
-    const notesOutput = await runWalletCommand("notes");
+    const notesOutput = await runWalletCommand("notes", passphrase);
     try {
       const parsed = JSON.parse(notesOutput);
       noteCount = parsed.count || (parsed.notes ? parsed.notes.length : 0);
@@ -300,8 +304,8 @@ async function getWalletSummary(): Promise<WalletSummary> {
   };
 }
 
-async function getPublicAddressOutput(): Promise<string> {
-  const output = await runWalletCommand("list-keys");
+async function getPublicAddressOutput(passphrase?: string): Promise<string> {
+  const output = await runWalletCommand("list-keys", passphrase);
   let parsed: { keys?: Array<{ index?: number; pk_x?: string; pk_y?: string }> };
 
   try {
@@ -332,13 +336,15 @@ function redactWalletOutput(output: string): string {
     .replace(/Seed phrase:\s*.*/gi, "Seed phrase: [redacted]");
 }
 
-function runWalletCommand(command: string): Promise<string> {
+function runWalletCommand(command: string, passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // Track concurrent processes
     activeProcesses++;
 
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (WALLET_DB) args.push("--db", WALLET_DB);
+    // Pipe passphrase via stdin for encrypted DBs
+    if (passphrase) args.push("--passphrase-stdin");
     // Always use --json for structured output when available
     args.push("--json", command);
 
@@ -356,9 +362,15 @@ function runWalletCommand(command: string): Promise<string> {
     if (process.env.TONKL_RPC_SECRET) safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    // SECURITY: Write passphrase via stdin instead of CLI arg (avoids ps visibility)
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
 
     let stdout = "";
     let stdoutSize = 0;
@@ -370,8 +382,8 @@ function runWalletCommand(command: string): Promise<string> {
       reject(new Error("Wallet command timed out"));
     }, REQUEST_TIMEOUT_MS);
 
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => {
       stdoutSize += chunk.length;
       if (stdoutSize <= MAX_STDOUT_SIZE) {
         stdout += chunk;
@@ -381,8 +393,8 @@ function runWalletCommand(command: string): Promise<string> {
       }
     });
 
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
+    child.stderr!.setEncoding("utf8");
+    child.stderr!.on("data", (chunk: string) => {
       // Cap stderr capture too (we only use it for logging, never send to client)
       if (stderr.length < 4096) stderr += chunk;
     });

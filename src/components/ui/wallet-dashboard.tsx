@@ -82,7 +82,7 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
         {/* Static Image Background */}
         <div className="absolute inset-0 z-0 bg-black pointer-events-none">
           <img 
-            src="/dark_ethereal_bg.png" 
+            src="/david_statue_bg.png" 
             alt="Tonkl Background"
             className="w-full h-full object-cover opacity-80" 
           />
@@ -101,8 +101,8 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
               <Avatar.Root className="w-12 h-12 rounded-full overflow-hidden border-2 border-white/10 shadow-lg">
                 <Avatar.Image
                   className="w-full h-full object-cover"
-                  src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop"
-                  alt="User Avatar"
+                  src="/david_pfp.png"
+                  alt="Tonkl Protocol Profile"
                 />
                 <Avatar.Fallback className="w-full h-full bg-cyan-900/50 flex items-center justify-center text-cyan-400 font-medium">
                   TK
@@ -226,28 +226,28 @@ export function WalletDashboard({ onClose }: { onClose: () => void }) {
               onClick={() => window.location.hash = "#send"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
-              <ArrowUpRight className="w-8 h-8 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="text-3xl text-white group-hover:scale-110 transition-transform font-serif font-light">Δ</span>
               <span className="font-medium text-white/90">Send</span>
             </button>
             <button
               onClick={() => window.location.hash = "#receive"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
-              <ArrowDownLeft className="w-8 h-8 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span className="text-3xl text-white group-hover:scale-110 transition-transform font-serif font-light">Σ</span>
               <span className="font-medium text-white/90">Receive</span>
             </button>
             <button
               onClick={() => window.location.hash = "#faucet"}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
-              <Droplet className="w-8 h-8 text-yellow-400 group-hover:scale-110 transition-transform" />
+              <span className="text-3xl text-white group-hover:scale-110 transition-transform font-serif font-light">Ω</span>
               <span className="font-medium text-white/90">Faucet</span>
             </button>
             <button
               onClick={() => window.dispatchEvent(new CustomEvent('open-tonkl-ai'))}
               className="flex flex-col items-center justify-center gap-4 bg-white/5 hover:bg-white/10 border border-white/10 py-8 rounded-[1.5rem] transition-all hover:-translate-y-1 shadow-[0_4px_20px_rgba(0,0,0,0.2)] group"
             >
-              <Coins className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform" />
+              <span className="text-3xl text-white group-hover:scale-110 transition-transform font-serif font-light">Φ</span>
               <span className="font-medium text-white/90 text-center text-sm">Create Token</span>
             </button>
           </div>

@@ -19,6 +19,7 @@ import { randomBytes } from "node:crypto";
 type Session = {
   token: string;
   address: string;        // pk_x of the wallet that created this session
+  passphrase?: string;    // DB encryption passphrase (in-memory only, never persisted)
   createdAt: number;
   lastUsed: number;
 };
@@ -50,7 +51,7 @@ if (cleanupTimer.unref) cleanupTimer.unref();
  * Create a new session for the given wallet address.
  * Returns the session token (32 hex chars).
  */
-export function createSession(address: string): string {
+export function createSession(address: string, passphrase?: string): string {
   // Evict oldest session if at capacity
   if (sessions.size >= MAX_SESSIONS) {
     let oldestToken = "";
@@ -69,6 +70,7 @@ export function createSession(address: string): string {
   sessions.set(token, {
     token,
     address,
+    passphrase,
     createdAt: now,
     lastUsed: now,
   });
@@ -107,6 +109,15 @@ export function validateSession(request: Request): Session | null {
  *   const authFailed = requireSession(request);
  *   if (authFailed) return authFailed;
  */
+/**
+ * Get the passphrase associated with a valid session.
+ * Returns undefined if no session or no passphrase stored.
+ */
+export function getSessionPassphrase(request: Request): string | undefined {
+  const session = validateSession(request);
+  return session?.passphrase;
+}
+
 export function requireSession(request: Request): Response | null {
   const session = validateSession(request);
   if (!session) {

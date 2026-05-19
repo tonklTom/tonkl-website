@@ -226,7 +226,7 @@ async function handleCreate(passphrase?: string): Promise<Response> {
   }
 
   // Generate session token for authenticated API access
-  const sessionToken = createSession(address || "new-wallet");
+  const sessionToken = createSession(address || "new-wallet", passphrase);
 
   return Response.json({
     success: true,
@@ -279,7 +279,7 @@ async function handleRestore(
     // Non-critical
   }
 
-  const sessionToken = createSession(address || "restored-wallet");
+  const sessionToken = createSession(address || "restored-wallet", passphrase);
 
   return Response.json({
     success: true,
@@ -304,7 +304,7 @@ async function handleUnlock(passphrase?: string): Promise<Response> {
       address = result.keys[0].pk_x;
     }
 
-    const sessionToken = createSession(address || "unlocked-wallet");
+    const sessionToken = createSession(address || "unlocked-wallet", passphrase);
 
     return Response.json({
       unlocked: true,
