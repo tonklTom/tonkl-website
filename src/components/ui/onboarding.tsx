@@ -2,10 +2,46 @@
 
 import React, { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Shield, Key, ArrowRight, Eye, EyeOff, AlertTriangle, ShieldCheck, Loader2 } from "lucide-react";
+import { Shield, Key, ArrowRight, Eye, EyeOff, AlertTriangle, ShieldCheck, Loader2, BookOpen, Sparkles } from "lucide-react";
 import { storeTonklSessionToken } from "@/lib/client-session";
 
-type OnboardingStep = "checking" | "welcome" | "passphrase" | "creating" | "seed" | "verify" | "success";
+type OnboardingStep = "checking" | "welcome" | "passphrase" | "creating" | "story" | "seed" | "verify" | "success";
+
+// Local-only seed story builder. Seed words must never be sent to a model,
+// server route, analytics system, or external process.
+function buildSeedStory(words: string[]): { text: string; positions: number[] } {
+  const templates = [
+    (w: string[]) => `In a land beyond the ${w[0]}, where the ${w[1]} meets the sky, a young wanderer discovered a ${w[2]} of immense ${w[3]}. They carried nothing but ${w[4]} and a quiet ${w[5]} that the path ahead would ${w[6]} into something extraordinary. Through the ${w[7]} of an ancient ${w[8]}, past the ${w[9]} stones of a forgotten ${w[10]}, they found a ${w[11]} inscribed with the word ${w[12]}. It spoke of ${w[13]} and the ${w[14]} that flows between all things. The wanderer learned to ${w[15]} what others could not see — the ${w[16]} patterns hidden in every ${w[17]}. At the ${w[18]} of the journey, standing before a ${w[19]} that shimmered like ${w[20]}, they whispered the final ${w[21]} into the ${w[22]} and felt the ${w[23]} of a thousand silent keys unlocking at once.`,
+    (w: string[]) => `The old keeper of the ${w[0]} had one ${w[1]} left to tell. It began with a ${w[2]} falling through ${w[3]}, drifting past ${w[4]} and ${w[5]} until it reached the ${w[6]} below. There, among the ${w[7]}, a creature of pure ${w[8]} waited beside a ${w[9]}. It had guarded the ${w[10]} since the first ${w[11]} was spoken — a word that sounded like ${w[12]}. The creature taught the keeper about ${w[13]}, about the ${w[14]} within every ${w[15]}, and how to ${w[16]} the invisible ${w[17]} that binds the world. When the ${w[18]} finally came, the keeper placed a ${w[19]} upon the ${w[20]}, sealed it with ${w[21]}, and walked into the ${w[22]}. Behind them, the ${w[23]} hummed with new life.`,
+    (w: string[]) => `At the edge of the ${w[0]}, a quiet signal called ${w[1]} crossed a sleeping valley. It found a ${w[2]} beside the ${w[3]}, wrapped in ${w[4]} and marked with ${w[5]}. The signal followed a ${w[6]} path through ${w[7]}, where each ${w[8]} carried a memory of ${w[9]}. In the center stood a ${w[10]} that opened only when the word ${w[11]} was spoken. Beyond it, the air tasted of ${w[12]} and the river moved with ${w[13]}. A hidden keeper taught the traveler to ${w[14]} the ${w[15]} between stars, to trust the ${w[16]} beneath every ${w[17]}, and to leave no ${w[18]} behind. When dawn reached the ${w[19]}, the final ${w[20]} became ${w[21]}, and the old ${w[22]} answered with ${w[23]}.`,
+  ];
+  const templateSeed = words.join("").split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const template = templates[templateSeed % templates.length];
+  const text = template(words);
+
+  // Find positions
+  const textLower = text.toLowerCase();
+  const positions: number[] = [];
+  let searchFrom = 0;
+  for (const word of words) {
+    const wordLower = word.toLowerCase();
+    let pos = -1;
+    while (searchFrom < textLower.length) {
+      const idx = textLower.indexOf(wordLower, searchFrom);
+      if (idx === -1) break;
+      const before = idx === 0 || /[^a-z]/.test(textLower[idx - 1]);
+      const after = idx + wordLower.length >= textLower.length || /[^a-z]/.test(textLower[idx + wordLower.length]);
+      if (before && after) {
+        pos = idx;
+        searchFrom = idx + wordLower.length;
+        break;
+      }
+      searchFrom = idx + 1;
+    }
+    positions.push(pos);
+  }
+  return { text, positions };
+}
 
 export function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<OnboardingStep>("welcome");
@@ -24,6 +60,11 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [verifyIndices, setVerifyIndices] = useState<number[]>([]);
   const [verifyInputs, setVerifyInputs] = useState(["", "", ""]);
   const [verifyError, setVerifyError] = useState(false);
+
+  // Story states — seed phrase woven into a narrative
+  const [storyText, setStoryText] = useState("");
+  const [storyRevealed, setStoryRevealed] = useState(false);
+  const [storyWordPositions, setStoryWordPositions] = useState<number[]>([]);
 
   // ── Create wallet via API ───────────────────────────────────
   const createWallet = useCallback(async () => {
@@ -59,6 +100,14 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       setSeedWords(words);
       setWalletAddress(data.address || "");
       setPendingSessionToken(typeof data.sessionToken === "string" ? data.sessionToken : "");
+      setSeedRevealed(false);
+      setStoryRevealed(false);
+      setVerifyInputs(["", "", ""]);
+      setVerifyError(false);
+
+      const story = buildSeedStory(words);
+      setStoryText(story.text);
+      setStoryWordPositions(story.positions);
 
       // Pick 3 random indices for verification
       const indices: number[] = [];
@@ -68,7 +117,8 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       }
       setVerifyIndices(indices.sort((a, b) => a - b));
 
-      setStep("seed");
+      // Go to story step — generate a narrative around the seed words
+      setStep("story");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Wallet creation failed");
       setStep("passphrase"); // Go back so they can retry
@@ -90,6 +140,140 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
       setVerifyError(true);
     }
   };
+
+  // ── Render the story with seed words highlighted ──────────
+  const renderStoryContent = () => {
+    if (!storyText) return null;
+
+    if (!storyRevealed) {
+      // Show the story as plain text — seed words look natural
+      return (
+        <p className="text-white/70 font-light leading-relaxed text-lg font-serif">
+          {storyText}
+        </p>
+      );
+    }
+
+    // Revealed mode — highlight seed words with glow animation
+    // Build segments: text before each word, the word itself, text after
+    const segments: { text: string; isSeed: boolean; seedIndex: number }[] = [];
+    let lastEnd = 0;
+
+    storyWordPositions.forEach((pos, i) => {
+      if (pos === -1) return;
+      const wordLen = seedWords[i].length;
+      if (pos > lastEnd) {
+        segments.push({ text: storyText.slice(lastEnd, pos), isSeed: false, seedIndex: -1 });
+      }
+      segments.push({ text: storyText.slice(pos, pos + wordLen), isSeed: true, seedIndex: i });
+      lastEnd = pos + wordLen;
+    });
+    if (lastEnd < storyText.length) {
+      segments.push({ text: storyText.slice(lastEnd), isSeed: false, seedIndex: -1 });
+    }
+
+    return (
+      <p className="text-white/40 font-light leading-relaxed text-lg font-serif">
+        {segments.map((seg, i) =>
+          seg.isSeed ? (
+            <motion.span
+              key={i}
+              initial={{ color: "rgba(255,255,255,0.4)", textShadow: "none" }}
+              animate={{
+                color: "rgba(34,211,238,1)",
+                textShadow: "0 0 20px rgba(34,211,238,0.6), 0 0 40px rgba(34,211,238,0.3)",
+              }}
+              transition={{ delay: seg.seedIndex * 0.12, duration: 0.8, ease: "easeOut" }}
+              className="font-medium relative inline"
+            >
+              {seg.text}
+              <motion.span
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: -18 }}
+                transition={{ delay: seg.seedIndex * 0.12 + 0.3, duration: 0.5 }}
+                className="absolute left-1/2 -translate-x-1/2 text-[10px] font-mono text-cyan-400/60 whitespace-nowrap pointer-events-none"
+              >
+                {seg.seedIndex + 1}
+              </motion.span>
+            </motion.span>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          )
+        )}
+      </p>
+    );
+  };
+
+  const renderStory = () => (
+    <motion.div
+      key="story"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className="max-w-2xl w-full relative z-10"
+    >
+      <div className="mb-10 text-center">
+        <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white/5 border border-white/10 mb-6 backdrop-blur-md shadow-[0_0_30px_rgba(255,255,255,0.05)]">
+          <BookOpen className="w-10 h-10 text-white/80" />
+        </div>
+        <h2 className="text-4xl font-serif font-light text-white mb-4 tracking-wide">
+          {storyRevealed ? "Your Recovery Phrase" : "A Local Memory Aid"}
+        </h2>
+        <p className="text-white/50 font-light max-w-lg mx-auto leading-relaxed">
+          {storyRevealed
+            ? "These 24 glowing words are your seed phrase. Write them down in order."
+            : "This story was created on this device. It contains your seed words, so never save, screenshot, or share it."
+          }
+        </p>
+      </div>
+
+      <div className="relative bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-10 mb-8 overflow-hidden shadow-[inset_0_0_30px_rgba(255,255,255,0.02)]">
+        {renderStoryContent()}
+      </div>
+
+      {storyRevealed && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 p-5 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center gap-4 backdrop-blur-md"
+        >
+          <div className="p-3 bg-amber-500/20 rounded-full shrink-0">
+            <AlertTriangle className="w-6 h-6 text-amber-500" />
+          </div>
+          <p className="text-amber-500/80 text-sm font-light">
+            Write down the 24 numbered words in exact order. This story is only a memory aid; your seed phrase is the only key to your vault.
+          </p>
+        </motion.div>
+      )}
+
+      <div className="flex gap-4">
+        {!storyRevealed ? (
+          <button
+            onClick={() => setStoryRevealed(true)}
+            className="w-full py-5 bg-white/10 backdrop-blur-md border border-white/20 text-white font-medium rounded-2xl hover:bg-white/20 transition-all duration-300 shadow-[0_0_20px_rgba(255,255,255,0.05)] group flex items-center justify-center gap-3"
+          >
+            <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform text-cyan-400" />
+            <span className="group-hover:scale-105 inline-block transition-transform">Highlight the 24 Words</span>
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={() => setStep("seed")}
+              className="flex-1 py-5 bg-transparent border border-white/10 text-white/70 font-medium rounded-2xl hover:bg-white/5 hover:text-white transition-all duration-300"
+            >
+              View as Grid
+            </button>
+            <button
+              onClick={() => setStep("verify")}
+              className="flex-1 py-5 bg-cyan-500 text-black font-medium rounded-2xl hover:bg-cyan-400 transition-all duration-300 shadow-[0_0_20px_rgba(34,211,238,0.3)] hover:shadow-[0_0_30px_rgba(34,211,238,0.5)] group"
+            >
+              <span className="group-hover:scale-105 inline-block transition-transform">I&apos;ve Written Them Down</span>
+            </button>
+          </>
+        )}
+      </div>
+    </motion.div>
+  );
 
   const renderWelcome = () => (
     <motion.div
@@ -440,6 +624,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === "welcome" && renderWelcome()}
         {step === "passphrase" && renderPassphrase()}
         {step === "creating" && renderCreating()}
+        {step === "story" && renderStory()}
         {step === "seed" && renderSeed()}
         {step === "verify" && renderVerify()}
         {step === "success" && renderSuccess()}
