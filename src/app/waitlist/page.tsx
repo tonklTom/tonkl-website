@@ -24,6 +24,8 @@ export default function WaitlistPage() {
   const [error, setError] = useState("");
   const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isActive, setIsActive] = useState(false);
 
   // Fetch live waitlist count on mount
   useEffect(() => {
@@ -54,6 +56,7 @@ export default function WaitlistPage() {
         return;
       }
       if (typeof data.count === "number") setWaitlistCount(data.count);
+      setJoinedText("SUCCESS");
       setStep("joined");
     } catch {
       setError("Network error. Try again.");
@@ -63,8 +66,6 @@ export default function WaitlistPage() {
 
   useEffect(() => {
     if (step === "joined") {
-      setJoinedText("SUCCESS");
-      
       const timer1 = setTimeout(() => {
         setJoinedText(getGreekCipher("SUCCESS"));
       }, 1500);
@@ -79,6 +80,26 @@ export default function WaitlistPage() {
       };
     }
   }, [step]);
+
+  let l1Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(10px, 10px, -24px)';
+  let l2Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(5px, 5px, -12px)';
+  let l3Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(0px, 0px, 0px)';
+  let glassColor = '#ffffff';
+  let neonGlow = 'rgba(6,182,212,0.45)';
+
+  if (isActive) {
+    l1Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(2px, 2px, -6px)';
+    l2Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(1px, 1px, -3px)';
+    l3Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(-1px, -1px, -2px)';
+    glassColor = '#06b6d4';
+    neonGlow = 'rgba(6,182,212,0.7)';
+  } else if (isHovered) {
+    l1Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(18px, 18px, -40px)';
+    l2Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(9px, 9px, -20px)';
+    l3Transform = 'rotateX(24deg) rotateY(-18deg) rotateZ(3deg) translate3d(-2px, -2px, 10px)';
+    glassColor = '#a5f3fc';
+    neonGlow = 'rgba(6,182,212,0.6)';
+  }
 
   return (
     <main className="relative bg-[#020202] min-h-screen w-full overflow-hidden flex items-center justify-center">
@@ -123,15 +144,58 @@ export default function WaitlistPage() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="flex flex-col items-center w-full"
+              className="flex flex-col items-center w-full py-6"
             >
-              <button
+              <div
                 onClick={() => setStep("email")}
-                className="px-12 py-6 bg-white/10 hover:bg-white/20 text-white font-serif tracking-[0.2em] uppercase text-lg rounded-2xl transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.05)] group border border-white/20 relative overflow-hidden backdrop-blur-md"
+                onMouseEnter={() => setIsHovered(true)}
+                onMouseLeave={() => { setIsHovered(false); setIsActive(false); }}
+                onMouseDown={() => setIsActive(true)}
+                onMouseUp={() => setIsActive(false)}
+                className="relative w-72 h-20 cursor-pointer select-none"
+                style={{
+                  perspective: '1200px',
+                  transformStyle: 'preserve-3d',
+                }}
               >
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_2s_infinite]" />
-                <span className="group-hover:scale-105 inline-block transition-transform">Join Waitlist</span>
-              </button>
+                {/* Layer 1: Ambient Cyan neon glow (base) */}
+                <div
+                  className="absolute inset-0 rounded-2xl bg-cyan-950/60 border border-cyan-500/40 transition-all duration-500 ease-out"
+                  style={{
+                    transform: l1Transform,
+                    boxShadow: `0 0 35px ${neonGlow}`,
+                  }}
+                />
+
+                {/* Layer 2: Deep matte black middle layer */}
+                <div
+                  className="absolute inset-0 rounded-2xl bg-[#090909] border border-white/10 shadow-2xl transition-all duration-500 ease-out"
+                  style={{
+                    transform: l2Transform,
+                  }}
+                />
+
+                {/* Layer 3: Glassmorphic top interactive layer */}
+                <div
+                  className="absolute inset-0 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all duration-500 ease-out shadow-[inset_0_0_25px_rgba(255,255,255,0.05)] overflow-hidden"
+                  style={{
+                    transform: l3Transform,
+                  }}
+                >
+                  {/* Subtle dynamic glass reflection/shimmer overlay */}
+                  <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-transparent pointer-events-none" />
+
+                  <span
+                    className="font-serif tracking-[0.25em] uppercase text-lg transition-all duration-500 select-none"
+                    style={{
+                      color: glassColor,
+                      textShadow: isHovered ? '0 0 8px rgba(6,182,212,0.2)' : 'none'
+                    }}
+                  >
+                    Join Waitlist
+                  </span>
+                </div>
+              </div>
             </motion.div>
           )}
 

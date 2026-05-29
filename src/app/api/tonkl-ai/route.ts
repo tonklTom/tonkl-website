@@ -9,7 +9,7 @@ const DEFAULT_NODE_URL = "http://127.0.0.1:9100";
 const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HISTORY_TURNS = 12;
 const MAX_HISTORY_CONTENT_LENGTH = 1200;
-const REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 60_000; // llama3.2 on local hardware can be slow
 const MAX_STDOUT_SIZE = 32_768; // Cap stdout to prevent memory exhaustion
 
 // ─── Rate limit: 20 requests per minute per IP ──────────────────
@@ -151,13 +151,6 @@ export async function POST(request: Request) {
     if (context === "token_creation" && !isExiting) {
       const extracted = extractTokenFields(message, currentForm);
 
-      // Detect "skip" / "looks good" / "no thanks" to bypass advanced features
-      const skipAdvanced = /\b(?:skip|no\s*thanks?|looks?\s*good|that'?s?\s*(?:it|all|fine|enough)|i'?m?\s*good|just\s*create|go\s*ahead|create\s*(?:it|now|the\s*token)|nah|nope|pass|done)\b/i.test(message);
-      if (skipAdvanced && !currentForm?._askedAdvanced) {
-        // Mark that advanced was offered and skipped
-        extracted._askedAdvanced = true;
-      }
-
       const hasExtracted = Object.keys(extracted).length > 0;
 
       if (hasExtracted) {
@@ -170,34 +163,48 @@ export async function POST(request: Request) {
         (payload.execution.data as Record<string, unknown>).extracted_fields = extracted;
       }
 
-      // Always generate a guided token creation reply when in token_creation context.
-      // This ensures the step-by-step wizard drives the conversation regardless of
-      // whether the LLM is available or what intent it detected.
-      const guidedReply = buildTokenCreationReply(extracted, currentForm);
-      payload.message = guidedReply;
-      if (payload.model) {
-        payload.model.text = guidedReply;
-      }
-      // Ensure intent reflects token creation for frontend handling
-      if (!payload.intent || payload.intent === "unknown" || payload.intent === "help") {
-        payload.intent = "create_token";
-      }
+      // Determine what the guided flow needs next
+      const merged = { ...(currentForm || {}), ...extracted };
+      const nextField = getNextMissingField(merged);
+      const llmAvailable = payload.model?.ok && payload.model?.text;
 
-      // After showing advanced features prompt, mark it so we don't ask again
-      // Detect if the reply we just generated is the advanced features prompt
-      if (guidedReply.includes("Tonkl supports some powerful on-chain features")) {
-        if (!hasExtracted || !extracted._askedAdvanced) {
-          // Inject _askedAdvanced into extracted fields so frontend stores it in form
-          if (!payload.execution) {
-            payload.execution = { ok: true, message: "Advanced features offered.", data: {} };
-          }
-          if (!payload.execution.data) {
-            payload.execution.data = {} as TonklAIExecutionData;
-          }
-          const ef = (payload.execution.data as Record<string, unknown>).extracted_fields || {};
-          (ef as Record<string, unknown>)._askedAdvanced = true;
-          (payload.execution.data as Record<string, unknown>).extracted_fields = ef;
+      // Strategy: server-side templates drive the flow structure (what to ask next).
+      // If the LLM is available, use its first 1-2 sentences as a natural acknowledgment
+      // of what the user said, then append the template's question for the next field.
+      // This gives us: natural conversation + reliable extraction + correct flow order.
+      const guidedReply = buildTokenCreationReply(extracted, currentForm);
+
+      if (llmAvailable && nextField !== "done" && nextField !== "features") {
+        // Extract just the LLM's acknowledgment (first 1-2 sentences) — skip its
+        // rambling or incorrect field questions since the template handles that
+        const llmAck = extractAcknowledgment(payload.model!.text!);
+        const hint = getFieldHint(nextField, merged);
+        // If the LLM acknowledged something useful, prepend it
+        if (llmAck && llmAck.length > 10 && hint) {
+          payload.message = `${llmAck}\n\n${hint}`;
+        } else {
+          payload.message = guidedReply;
         }
+      } else {
+        // For "done" and "features" steps, use the full guided reply
+        // (features step has its own rich formatting; done step shows the preview summary)
+        payload.message = guidedReply;
+      }
+      if (payload.model) payload.model.text = payload.message;
+
+      // In token_creation context, ALWAYS force the intent — the LLM might
+      // return "confirmation" or "general" for messages like "looks good"
+      payload.intent = "create_token";
+
+      // Make sure extracted fields (including auto-inferred ones) reach frontend
+      if (Object.keys(extracted).length > 0) {
+        if (!payload.execution) {
+          payload.execution = { ok: true, message: "Fields extracted.", data: {} };
+        }
+        if (!payload.execution.data) {
+          payload.execution.data = {} as TonklAIExecutionData;
+        }
+        (payload.execution.data as Record<string, unknown>).extracted_fields = extracted;
       }
     }
 
@@ -357,6 +364,10 @@ function runTonklAI(
         : pythonPath,
     };
     if (walletCmd) safeEnv.TONKL_AI_WALLET_CMD = walletCmd;
+    // Pass LLM model config so Tonkl AI can reach a local or hosted Llama endpoint.
+    if (process.env.TONKL_AI_MODEL_BASE_URL) safeEnv.TONKL_AI_MODEL_BASE_URL = process.env.TONKL_AI_MODEL_BASE_URL;
+    if (process.env.TONKL_AI_MODEL_NAME) safeEnv.TONKL_AI_MODEL_NAME = process.env.TONKL_AI_MODEL_NAME;
+    if (process.env.TONKL_AI_MODEL_API_KEY) safeEnv.TONKL_AI_MODEL_API_KEY = process.env.TONKL_AI_MODEL_API_KEY;
     if (process.env.VIRTUAL_ENV) safeEnv.VIRTUAL_ENV = process.env.VIRTUAL_ENV;
     if (process.env.NARGO_PATH) {
       safeEnv.PATH = `${process.env.NARGO_PATH}:${safeEnv.PATH}`;
@@ -628,6 +639,77 @@ function trimReadOnlySummary(value: string): string {
     : trimmed;
 }
 
+// ─── Token creation: LLM steering helpers ───────────────────
+
+type MergedForm = Record<string, unknown>;
+
+function getNextMissingField(merged: MergedForm): string {
+  if (!merged.name) return "name";
+  if (!merged.symbol) return "symbol";
+  const supply = String(merged.initialSupply || "");
+  if (!supply || supply === "0") return "supply";
+  const desc = String(merged.description || "");
+  if (!desc || desc.length < 10) return "description";
+  // After description, present tokenomics/features before final preview
+  // _askedAdvanced is set by buildTokenCreationReply when features are presented
+  if (!merged._askedAdvanced) return "features";
+  return "done";
+}
+
+function getFieldHint(field: string, merged: MergedForm): string {
+  switch (field) {
+    case "name":
+      return "So — what do you want to call this token?";
+    case "symbol": {
+      const name = String(merged.name);
+      const suggestions = generateTickerSuggestions(name);
+      const sugList = suggestions.map(s => `$${s}`).join(", ");
+      return `What ticker symbol works for "${name}"? Some ideas: ${sugList} — or pick your own.`;
+    }
+    case "supply": {
+      const sym = String(merged.symbol).toUpperCase();
+      return `How many $${sym} tokens should exist at launch? Just give me a number — like "1 million" or "10000". I'll help you think through it.`;
+    }
+    case "description":
+      return "What's this token for? Just a sentence or two — I'll help you polish it into a proper description.";
+    case "features":
+      // This is built dynamically in buildTokenCreationReply
+      return "";
+    default:
+      return "";
+  }
+}
+
+/**
+ * Extract just the first 1-2 sentences from the LLM's response as an acknowledgment.
+ * This lets us use the LLM's natural language for the "I understand" part while
+ * controlling the actual question/flow via templates.
+ *
+ * STRICT filtering: reject anything that contains a question, references resetting,
+ * or tries to ask about fields the template already handles.
+ */
+function extractAcknowledgment(text: string): string {
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  let ack = "";
+  for (let i = 0; i < Math.min(sentences.length, 2); i++) {
+    const s = sentences[i].trim();
+    // Skip any sentence that contains a question mark
+    if (s.includes("?")) continue;
+    // Skip sentences that sound like they're restarting or asking about fields
+    if (/\b(start again|start over|let me know|how many|what ticker|what symbol|what.*call|tell me|describe|purpose)\b/i.test(s)) continue;
+    // Skip sentences that reference specific field names
+    if (/\b(supply|ticker|symbol|name|description|category|decimals)\b/i.test(s)) continue;
+    const candidate = ack ? `${ack} ${s}` : s;
+    if (candidate.length > 160) break;
+    ack = candidate;
+  }
+  // Final check: reject if it starts with a question word
+  if (ack && /^(what|how|would|should|do you|can you|which|where|when|why)/i.test(ack.trim())) {
+    return "";
+  }
+  return ack.trim();
+}
+
 // ─── Token creation conversational replies ────────────────────
 
 type TokenFormState = Record<string, unknown>;
@@ -642,213 +724,397 @@ function buildTokenCreationReply(
   const hasSymbol = Boolean(merged.symbol);
   const hasSupply = Boolean(merged.initialSupply) && String(merged.initialSupply) !== "0";
   const hasDescription = Boolean(merged.description) && String(merged.description).length >= 10;
-  const hasCategory = Boolean(merged.category) && String(merged.category) !== "Utility"; // Utility is default
-  const hasBurnRate = Boolean(merged.burnRate) && String(merged.burnRate) !== "0";
-  const hasEchoRate = Boolean(merged.echoRate) && String(merged.echoRate) !== "0";
-  const hasAdvancedConfig = hasBurnRate || hasEchoRate || hasCategory ||
-    (merged.decimals !== undefined && merged.decimals !== 0) ||
-    Boolean(merged.supplyCap);
-  // Track whether we've already shown the advanced features prompt
-  const askedAdvanced = Boolean(merged._askedAdvanced);
 
-  // ── Step 1: No name yet — ask for the token name ──────────
+  // ── Step 1: No name yet ──────────────────────────────────
   if (!hasName && !extracted.name) {
-    return "Let's create a token together. First up — what would you like to call it? This is the full display name that people will see (e.g. AlphaGold, Sunrise Token, Pixel Points).";
+    return "Let's create your token. What do you want to call it?";
   }
 
-  // ── Step 2: Got a name, need a symbol (ticker) ────────────
+  // ── Step 2: Need a ticker symbol ─────────────────────────
   if (hasName && !hasSymbol && !extracted.symbol) {
     const name = String(merged.name);
     const suggestions = generateTickerSuggestions(name);
     const sugList = suggestions.map(s => `$${s}`).join(", ");
-    return `Great name — "${name}"! Now let's pick a ticker symbol. This is the short identifier people will use to trade and reference your token (like $BTC or $ETH).\n\nBased on the name, here are some ideas: ${sugList}\n\nOr go with something completely different — what feels right?`;
+    return `"${name}" — got it. What ticker symbol do you want? Some ideas: ${sugList} — or pick your own.`;
   }
 
-  // ── Step 3: Got name + symbol, need supply ────────────────
+  // ── Step 3: Need supply ──────────────────────────────────
   if (hasName && hasSymbol && !hasSupply && !extracted.initialSupply) {
     const symbol = String(merged.symbol).toUpperCase();
-    return `$${symbol} — nice choice. Now for the initial supply. This is how many tokens will exist when you launch.\n\nHere's a quick guide:\n• 1,000 – 10,000 → scarce, collectible feel (think rare membership passes)\n• 100,000 – 1,000,000 → balanced, good for most utility or community tokens\n• 10,000,000+ → high supply, lower unit price feel (common for meme or gaming tokens)\n\nYou can always mint more later if needed. How many $${symbol} tokens do you want to start with?`;
+    return `$${symbol} locked in. How many tokens should exist at launch? Here's a breakdown:\n\n` +
+      `• 10,000 or less — Scarce and collectible. Each token feels valuable. Great for membership passes or premium access. Think limited seats at a table.\n\n` +
+      `• 1,000,000 — The sweet spot. Enough liquidity for trading, but each token still feels meaningful. Works for most utility and governance tokens.\n\n` +
+      `• 100M to 1B+ — High volume, low unit price. Feels accessible — people like holding "millions" of something. Perfect for tipping, micro-rewards, or meme tokens.\n\n` +
+      `No wrong answer — it depends on how you want $${symbol} to feel. Just give me a number or say something like "10 million".`;
   }
 
-  // ── Step 4: Got essentials, need description ──────────────
+  // ── Step 4: Need description ─────────────────────────────
   if (hasName && hasSymbol && hasSupply && !hasDescription && !extracted.description) {
     const supply = parseInt(String(merged.initialSupply)).toLocaleString();
-    return `${supply} tokens — got it. Now give me a short description of what ${merged.name} is for. Just a sentence or two, like "A loyalty token for my coffee shop" or "Community governance for our DAO." This helps other users understand what your token represents.`;
-  }
-
-  // ── Step 5: Got basics, offer advanced features ───────────
-  // Only show this once — if user hasn't configured any advanced features
-  // and we haven't already asked
-  if (hasName && hasSymbol && hasSupply && hasDescription && !hasAdvancedConfig && !askedAdvanced) {
-    const category = inferCategoryFromDescription(String(merged.description), String(merged.name));
-    const suggestions = suggestAdvancedFeatures(category, String(merged.description));
-
-    if (suggestions.length > 0) {
-      const symbol = String(merged.symbol).toUpperCase();
-      let reply = `Nice — $${symbol} is shaping up. Before we finalize, Tonkl supports some powerful on-chain features you might want to configure:\n\n`;
-
-      reply += suggestions.join("\n\n");
-
-      reply += `\n\nYou can set any of these now — for example, "add a 2% burn rate" or "set echo to 1%, category governance." Or just say "skip" or "looks good" to create the token as-is.`;
-      return reply;
-    }
-  }
-
-  // ── All essentials collected — show summary ───────────────
-  if (hasName && hasSymbol && hasSupply) {
-    const parts: string[] = [];
     const symbol = String(merged.symbol).toUpperCase();
-
-    // Acknowledge what was just provided
-    if (extracted.name) parts.push(`Name set to "${extracted.name}".`);
-    if (extracted.symbol) parts.push(`Ticker is $${symbol}.`);
-    if (extracted.initialSupply) parts.push(`Supply: ${parseInt(extracted.initialSupply).toLocaleString()} tokens.`);
-    if (extracted.description) parts.push(`Description noted.`);
-    if (extracted.category) parts.push(`Category: ${extracted.category}.`);
-    if (extracted.decimals !== undefined) parts.push(`Decimals: ${extracted.decimals}.`);
-    if (extracted.burnRate) parts.push(`Burn rate: ${extracted.burnRate} bps.`);
-    if (extracted.echoRate) parts.push(`Echo rate: ${extracted.echoRate} bps.`);
-
-    // Build summary of what's configured
-    const config: string[] = [];
-    config.push(`Name: ${merged.name}`);
-    config.push(`Ticker: $${symbol}`);
-    config.push(`Supply: ${parseInt(String(merged.initialSupply)).toLocaleString()}`);
-    if (hasCategory) config.push(`Category: ${merged.category}`);
-    if (hasBurnRate) config.push(`Burn rate: ${merged.burnRate} bps (${(parseInt(String(merged.burnRate)) / 100).toFixed(2)}% per transfer)`);
-    if (hasEchoRate) config.push(`Echo rate: ${merged.echoRate} bps (${(parseInt(String(merged.echoRate)) / 100).toFixed(2)}% redistributed)`);
-    if (merged.supplyCap) config.push(`Supply cap: ${parseInt(String(merged.supplyCap)).toLocaleString()}`);
-    if (merged.decimals && merged.decimals !== 0) config.push(`Decimals: ${merged.decimals}`);
-
-    parts.push(`\nHere's your $${symbol} summary:\n${config.map(c => `• ${c}`).join("\n")}`);
-
-    parts.push(
-      `\nHit "Create Token" below to mint it on-chain. The ZK proof takes about 30-60 seconds to generate. You can also edit any details in the preview card, or tell me if you want to change something.`
-    );
-
-    return parts.join(" ");
+    return `${supply} $${symbol} — locked in. Now tell me what this token is for — just a rough idea and I'll help you write a proper description.`;
   }
 
-  // ── Fallback: acknowledge whatever was extracted ───────────
+  // ── Step 5: Description received → polish it + present features ──
+  if (hasName && hasSymbol && hasSupply && hasDescription && !merged._askedAdvanced) {
+    const symbol = String(merged.symbol).toUpperCase();
+    const description = String(merged.description);
+    const name = String(merged.name);
+
+    // Auto-infer category from the description
+    const inferredCategory = inferCategoryFromDescription(description, name);
+    const categoryDisplay = CATEGORY_DISPLAY[inferredCategory] || "Utility";
+    extracted.category = categoryDisplay;
+
+    // Generate or polish the description — if the user was vague, write a proper one;
+    // if they gave detail, clean it up and make it professional
+    const polished = polishDescription(description, name, symbol, inferredCategory);
+    extracted.description = polished;
+
+    // Mark features as presented so next round goes to "done"
+    extracted._askedAdvanced = true; // reuse this field to signal _featuresPresented
+
+    const parts: string[] = [];
+
+    // Present the AI-written description
+    parts.push(`Here's a description I've written for $${symbol}:\n\n"${polished}"\n\nYou can edit this in the preview card or tell me to rewrite it.`);
+
+    // Category-aware acknowledgment
+    const categoryIntros: Record<string, string> = {
+      impact: `I've categorised this as an Impact token — it'll show up under social good / charity projects.`,
+      community: `Tagged as a Community token — great for social and fan-driven projects.`,
+      governance: `This is a Governance token — tagged for DAO and voting discovery.`,
+      meme: `Meme token energy detected — tagged as Meme.`,
+      gaming: `Tagged as a Gaming token — players will find it easily.`,
+      stablecoin: `Tagged as a Stablecoin — stability-focused discovery.`,
+      rwa: `Tagged as RWA — real-world asset backed.`,
+      utility: `Tagged as a Utility token.`,
+    };
+    parts.push(categoryIntros[inferredCategory] || categoryIntros.utility);
+
+    // Present Tonkl-specific on-chain features
+    parts.push(`\nTonkl lets you bake tokenomics directly into the protocol. Here are the features available:`);
+
+    // Suggest features based on category
+    const featureSuggestions: string[] = [];
+    if (inferredCategory === "impact" || inferredCategory === "community") {
+      featureSuggestions.push(`• Echo (recommended for ${categoryDisplay}) — redirects a % of every transfer to a designated wallet (treasury, charity fund, etc). I'd suggest 1%.`);
+      extracted.echoRate = "100"; // 100 bps = 1% default
+    } else {
+      featureSuggestions.push(`• Echo — redirects a % of every transfer to a designated wallet (treasury, rewards pool, etc).`);
+    }
+
+    if (inferredCategory === "meme") {
+      featureSuggestions.push(`• Burn (recommended for Meme) — permanently destroys a % of every transfer. Makes supply deflationary. I'd suggest 2%.`);
+      extracted.burnRate = "200"; // 200 bps = 2% default
+    } else {
+      featureSuggestions.push(`• Burn — permanently destroys a % of every transfer. Makes supply deflationary over time.`);
+    }
+
+    featureSuggestions.push(`• Supply Cap — hard maximum that can never be exceeded, even by future minting.`);
+
+    parts.push(featureSuggestions.join("\n"));
+
+    // Show what's been auto-set
+    const autoSet: string[] = [];
+    if (extracted.echoRate && extracted.echoRate !== "0") autoSet.push(`1% echo`);
+    if (extracted.burnRate && extracted.burnRate !== "0") autoSet.push(`2% burn`);
+    if (autoSet.length > 0) {
+      parts.push(`\nI've auto-set ${autoSet.join(" and ")} based on the token type. Say "looks good" to continue with the preview, or tell me to change/remove anything.`);
+    } else {
+      parts.push(`\nWant me to enable any of these? Or say "looks good" to continue to the preview.`);
+    }
+
+    return parts.join("\n");
+  }
+
+  // ── Step 6: All done — show final summary with preview ──
+  if (hasName && hasSymbol && hasSupply && hasDescription && merged._askedAdvanced) {
+    const symbol = String(merged.symbol).toUpperCase();
+    const name = String(merged.name);
+    const supply = parseInt(String(merged.initialSupply)).toLocaleString();
+    const category = String(merged.category || "Utility");
+
+    const parts: string[] = [];
+    parts.push(`Here's your $${symbol} preview:`);
+    parts.push(`• ${name} ($${symbol}) · ${category}`);
+    parts.push(`• ${supply} tokens`);
+    if (merged.burnRate && String(merged.burnRate) !== "0") {
+      parts.push(`• ${(parseInt(String(merged.burnRate)) / 100).toFixed(1)}% burn per transfer`);
+    }
+    if (merged.echoRate && String(merged.echoRate) !== "0") {
+      parts.push(`• ${(parseInt(String(merged.echoRate)) / 100).toFixed(1)}% echo redistribution`);
+    }
+    parts.push(`\nYou can upload a logo in the preview card, or edit any details. Hit "Create Token" when you're ready — the ZK proof takes about 30-60 seconds.`);
+
+    return parts.join("\n");
+  }
+
+  // ── Fallback ─────────────────────────────────────────────
   const parts: string[] = [];
   if (Object.keys(extracted).length > 0) {
     const items: string[] = [];
     if (extracted.name) items.push(`name "${extracted.name}"`);
-    if (extracted.symbol) items.push(`symbol $${extracted.symbol}`);
-    if (extracted.category) items.push(`category ${extracted.category}`);
-    if (extracted.initialSupply) items.push(`supply of ${parseInt(extracted.initialSupply).toLocaleString()}`);
-    if (extracted.decimals !== undefined) items.push(`${extracted.decimals} decimals`);
-    if (extracted.burnRate) items.push(`burn rate of ${extracted.burnRate} bps`);
-    if (extracted.echoRate) items.push(`echo rate of ${extracted.echoRate} bps`);
+    if (extracted.symbol) items.push(`$${extracted.symbol}`);
+    if (extracted.initialSupply) items.push(`${parseInt(extracted.initialSupply).toLocaleString()} supply`);
     parts.push(`Got it — ${items.join(", ")}.`);
   }
 
   const missing: string[] = [];
   if (!hasName) missing.push("a name");
-  if (!hasSymbol) missing.push("a ticker symbol");
-  if (!hasSupply) missing.push("the initial supply");
+  if (!hasSymbol) missing.push("a ticker");
+  if (!hasSupply) missing.push("supply amount");
 
   if (missing.length > 0) {
-    const last = missing.length > 1 ? missing.pop()! : null;
-    const list = last ? `${missing.join(", ")}, and ${last}` : missing[0];
-    parts.push(`I still need ${list} to proceed.`);
+    parts.push(`Still need ${missing.join(" and ")}.`);
   }
 
   return parts.join(" ");
 }
 
 /**
- * Infer a category from the token description and name.
+ * Polish a raw user description into something presentable.
+ * Capitalises, removes filler, adds the token name context.
+ */
+/**
+ * Generate a proper token description from the user's raw input.
+ *
+ * If the user gave enough detail, clean it up and make it professional.
+ * If the user was vague ("idk", "just a personal thing"), generate a
+ * real description from context (name, category, keywords).
+ */
+function polishDescription(raw: string, name: string, symbol: string, category?: string): string {
+  // ALWAYS generate a proper description from context.
+  // The user's raw text is treated as a hint/brief — not the final copy.
+  // This ensures even casual input like "its about my cat" produces a
+  // professional token description.
+  return generateDescriptionFromContext(name, symbol, category || "utility", raw.trim());
+}
+
+/**
+ * Generate a meaningful description from context when the user was vague,
+ * or enhance their rough idea into a proper token description.
+ *
+ * Uses the inferred category, token name, and any keywords from the user's
+ * input to write something that sounds like it belongs on a token listing.
+ */
+function generateDescriptionFromContext(name: string, symbol: string, category: string, hint: string): string {
+  const sym = symbol.toUpperCase();
+  const cat = category.toLowerCase();
+  const hintLower = hint.toLowerCase();
+
+  // ── Try to extract the "subject" from the hint ──────────
+  // "a reflection of my cat tummy" → "cat tummy"
+  // "helping kids learn to read" → "helping kids learn to read"
+  // "just my personal thing" → personal
+  const subjectMatch = hint.match(/(?:reflection\s+of|tribute\s+to|inspired\s+by|based\s+on|about|for)\s+(?:my\s+)?(.+)/i);
+  const subject = subjectMatch ? subjectMatch[1].trim() : "";
+
+  // ── Detect specific themes in the hint ──────────────────
+  const hasAnimal = /\b(cat|dog|puppy|kitten|hamster|frog|fish|bird|turtle|bunny|pet)\b/i.test(hintLower);
+  const hasFood = /\b(pizza|taco|burger|ramen|cookie|cake|banana|tendies)\b/i.test(hintLower);
+  const hasPersonal = /\b(personal|my\s+own|creator|myself|me)\b/i.test(hintLower);
+  const hasCommunity = /\b(community|fan|follower|support|audience|people)\b/i.test(hintLower);
+  const hasReward = /\b(reward|earn|incentiv|loyal|exclusive|access|perk|benefit)\b/i.test(hintLower);
+  const hasCharity = /\b(charit|donat|cause|help|impact|fund|educat|school|climate|environment|health)\b/i.test(hintLower);
+  const hasGame = /\b(game|play|quest|level|score|earn.*play)\b/i.test(hintLower);
+
+  // ── MEME descriptions — match the energy ────────────────
+  if (cat === "meme") {
+    if (hasAnimal && subject) {
+      return `${name} ($${sym}) is a meme token inspired by ${subject}. No roadmap, no promises — just pure ${subject} energy on the Tonkl network. Hold $${sym} and join the cult.`;
+    }
+    if (hasAnimal) {
+      const animal = hintLower.match(/\b(cat|dog|puppy|kitten|hamster|frog|fish|bird|turtle|bunny)\b/i)?.[1] || "pet";
+      return `${name} ($${sym}) is a ${animal}-themed meme token on Tonkl. Community-driven, privacy-first, and powered by pure ${animal} energy. Every trade is a tribute.`;
+    }
+    if (hasFood) {
+      const food = hintLower.match(/\b(pizza|taco|burger|ramen|cookie|cake|banana|tendies)\b/i)?.[1] || "food";
+      return `${name} ($${sym}) — the official ${food} token of the Tonkl network. Deflationary, delicious, and completely unnecessary. Hold it because you can.`;
+    }
+    if (subject) {
+      return `${name} ($${sym}) is a meme token born from ${subject}. No utility, no apologies — just vibes and privacy-first transactions on Tonkl.`;
+    }
+    return `${name} ($${sym}) is a community-driven meme token on the Tonkl network. No roadmap needed — just vibes, privacy, and deflationary tokenomics. The culture is the utility.`;
+  }
+
+  // ── IMPACT descriptions ─────────────────────────────────
+  if (cat === "impact" || hasCharity) {
+    if (subject) {
+      return `${name} ($${sym}) is an impact token dedicated to ${subject}. A portion of every transaction is redirected to support the cause, with privacy-preserving transfers ensuring donor confidentiality on the Tonkl network.`;
+    }
+    return `${name} ($${sym}) is an impact token designed to drive positive change. Every transaction channels funds toward the project's mission — with full on-chain accountability and privacy-preserving transfers on Tonkl.`;
+  }
+
+  // ── COMMUNITY descriptions ──────────────────────────────
+  if (cat === "community" || hasCommunity || hasReward) {
+    if (hasPersonal) {
+      return `${name} ($${sym}) is a personal creator token on the Tonkl network. Supporters hold $${sym} to back the creator directly, unlock exclusive perks, and be part of the inner circle — with on-chain privacy and programmable tokenomics.`;
+    }
+    return `${name} ($${sym}) is a community token that rewards early supporters and active participants. Holders unlock exclusive benefits and help shape the project's future — all on Tonkl's privacy-first network.`;
+  }
+
+  // ── GAMING descriptions ─────────────────────────────────
+  if (cat === "gaming" || hasGame) {
+    return `${name} ($${sym}) powers in-game economies with privacy-preserving transactions. Players earn, trade, and spend $${sym} without exposing their game activity or wallet balances.`;
+  }
+
+  // ── GOVERNANCE descriptions ─────────────────────────────
+  if (cat === "governance") {
+    return `${name} ($${sym}) gives holders a direct vote in the project's future. Proposals, votes, and treasury decisions are tracked on-chain — with Tonkl's privacy layer keeping individual voting choices confidential.`;
+  }
+
+  // ── STABLECOIN descriptions ─────────────────────────────
+  if (cat === "stablecoin") {
+    return `${name} ($${sym}) is a stablecoin on the Tonkl network, maintaining a steady value while preserving full transaction privacy. Ideal for payments, savings, and DeFi without volatility.`;
+  }
+
+  // ── RWA descriptions ────────────────────────────────────
+  if (cat === "rwa") {
+    return `${name} ($${sym}) tokenises real-world assets on the Tonkl network. Ownership and transfers happen on-chain with privacy-preserving verification — bridging physical value to the decentralised world.`;
+  }
+
+  // ── PERSONAL (utility fallback) ─────────────────────────
+  if (hasPersonal) {
+    return `${name} ($${sym}) is a personal token on the Tonkl network. It represents the creator's vision and gives holders a direct connection — with privacy-preserving transfers and programmable on-chain mechanics.`;
+  }
+
+  // ── UTILITY (default) ───────────────────────────────────
+  if (subject) {
+    return `${name} ($${sym}) is a utility token built around ${subject}. It powers access, participation, and value exchange within its ecosystem — with privacy-preserving transfers on the Tonkl network.`;
+  }
+  return `${name} ($${sym}) is a utility token on the Tonkl network. It powers access, transactions, and participation within its ecosystem — with privacy-preserving transfers built into every interaction.`;
+}
+
+/**
+ * Infer a category from the token description and name using contextual understanding.
+ *
+ * This goes beyond keyword matching — it reads the *intent* behind what the user said.
+ * "a reflection of my cat tummy" → meme (pets/animals/silly = meme energy)
+ * "helping kids in rural schools" → impact (helping/supporting people = impact)
+ * "earn points for playing" → gaming (earning through activity = gaming)
  */
 function inferCategoryFromDescription(description: string, name: string): string {
   const text = `${name} ${description}`.toLowerCase();
 
-  if (/\b(?:meme|funny|joke|degen|shitpost|pepe|doge|moon)\b/.test(text)) return "meme";
-  if (/\b(?:govern|vote|voting|dao|proposal|council|delegate)\b/.test(text)) return "governance";
-  if (/\b(?:stable|pegged|usd|dollar|fiat)\b/.test(text)) return "stablecoin";
-  if (/\b(?:community|social|fan|membership|loyalty|reward)\b/.test(text)) return "community";
-  if (/\b(?:game|gaming|play|quest|level|xp|loot|nft)\b/.test(text)) return "gaming";
-  if (/\b(?:impact|charity|climate|donate|social\s*good|green|carbon|aid)\b/.test(text)) return "impact";
-  if (/\b(?:real[\s-]*world|property|asset|commodity|gold|oil|rwa)\b/.test(text)) return "rwa";
-  if (/\b(?:utility|service|platform|api|access|tool|infra)\b/.test(text)) return "utility";
+  // ── Explicit keywords (highest confidence) ──────────────
+  if (/\b(?:meme|meme\s*coin|shitcoin|degen)\b/.test(text)) return "meme";
+  if (/\b(?:govern(?:ance)?|vote|voting|dao|proposal|council|delegate)\b/.test(text)) return "governance";
+  if (/\b(?:stable\s*coin|pegged|usd\b|dollar|fiat)\b/.test(text)) return "stablecoin";
+  if (/\b(?:rwa|real[\s-]*world[\s-]*asset)\b/.test(text)) return "rwa";
 
-  return "utility"; // default
-}
+  // ── Contextual signals: MEME ────────────────────────────
+  // Animals, pets, food, silly things, pop culture, absurdity = meme energy
+  const memeSignals = [
+    /\b(?:cat|dog|puppy|kitten|hamster|frog|ape|monkey|shiba|doge|pepe|bird|fish|turtle|bunny|bear|wolf|fox)\b/,
+    /\b(?:tummy|belly|butt|paw|snoot|boop|bonk|sploot|chonk|floof|smol|thicc)\b/,
+    /\b(?:pizza|taco|burger|ramen|tendies|banana|cookie|cake)\b/,
+    /\b(?:moon|lambo|diamond\s+hands?|hodl|wen|wagmi|gm|ser|fren)\b/,
+    /\b(?:funny|silly|joke|lol|lmao|vibe|vibes|chaos|absurd|random|weird|cursed|based)\b/,
+    /\b(?:reflection\s+of|tribute\s+to|inspired\s+by|dedicated\s+to)\s+(?:my\s+)?(?:cat|dog|pet|hamster)\b/,
+    /\b(?:just\s+for\s+(?:fun|laughs|vibes)|no\s+reason|why\s+not|because\s+i\s+can)\b/,
+  ];
+  if (memeSignals.filter(p => p.test(text)).length >= 1) return "meme";
 
-/**
- * Suggest advanced token features based on the inferred category and description.
- * Returns an array of suggestion strings, each explaining a feature and why it fits.
- */
-function suggestAdvancedFeatures(category: string, description: string): string[] {
-  const suggestions: string[] = [];
-  const lower = description.toLowerCase();
+  // ── Contextual signals: IMPACT ──────────────────────────
+  // Helping, giving, causes, education, environment, health = impact
+  const impactSignals = [
+    /\b(?:charity|charit(?:able|ies)|donate|donation|philanthrop)/,
+    /\b(?:help(?:ing)?|support(?:ing)?|fund(?:ing)?|rais(?:e|ing))\s+(?:for\s+)?(?:people|children|kids|communities|families|education|schools|health|the\s+poor|refugees)/,
+    /\b(?:climate|environment|carbon|green|sustain|renewable|clean\s+(?:water|energy|air))/,
+    /\b(?:education|school|learning|teach|literacy|scholarship)/,
+    /\b(?:hunger|poverty|homeless|shelter|disaster|relief|rescue|aid)\b/,
+    /\b(?:hospital|medical|healthcare|mental\s+health|therapy|cure|disease)/,
+    /\b(?:social\s+good|social\s+impact|make\s+(?:a\s+)?(?:the\s+)?(?:world|difference)|change\s+(?:the\s+)?(?:world|lives))/,
+    /\b(?:non[\s-]*profit|ngo|foundation|cause|mission|empower)/,
+    /\b(?:across\s+the\s+globe|worldwide|global|developing\s+(?:countries|nations|world))/,
+  ];
+  if (impactSignals.filter(p => p.test(text)).length >= 1) return "impact";
 
-  // Echo (redistribution) — especially for community, impact, governance
-  if (["community", "impact", "governance", "gaming"].includes(category)) {
-    suggestions.push(
-      `🔄 **Echo Rate** — Automatically redirect a % of every transfer to a designated address. Great for ${
-        category === "impact" ? "funding causes with every transaction" :
-        category === "governance" ? "feeding a DAO treasury on every trade" :
-        category === "gaming" ? "pooling rewards for players" :
-        "giving back to your community with every transfer"
-      }. Set in basis points (e.g. 100 bps = 1%). Example: "echo rate 1%" or "echo 250 bps".`
-    );
-  }
+  // ── Contextual signals: COMMUNITY ───────────────────────
+  // Fans, followers, creators, support, membership = community
+  const communitySignals = [
+    /\b(?:community|fan(?:s|base)?|follower|supporter|member(?:ship)?|tribe|squad|crew)\b/,
+    /\b(?:creator|influencer|streamer|artist|musician|content)\b/,
+    /\b(?:exclusive|access|perks?|benefits?|rewards?|loyalty|vip)\b/,
+    /\b(?:my\s+(?:followers|fans|audience|supporters|community|people))\b/,
+    /\b(?:back\s+me|support\s+me|join\s+(?:me|us)|come\s+together)\b/,
+    /\b(?:personal\s+(?:token|brand|project)|my\s+own\s+token)\b/,
+  ];
+  if (communitySignals.filter(p => p.test(text)).length >= 2) return "community";
+  // Single strong community signal
+  if (/\b(?:my\s+(?:followers|fans|audience)|personal\s+token|creator\s+token)\b/.test(text)) return "community";
 
-  // Burn rate — especially for meme, community, deflationary concepts
-  if (["meme", "community", "utility"].includes(category) || /\b(?:deflat|scarc|burn|rare)\b/.test(lower)) {
-    suggestions.push(
-      `🔥 **Burn Rate** — Destroy a % of tokens on every transfer, making the supply deflationary over time. ${
-        category === "meme" ? "Classic meme tokenomics — the longer it trades, the rarer it gets." :
-        "Creates scarcity pressure as the token gets used more."
-      } Set in basis points (e.g. 200 bps = 2%). Example: "burn rate 2%" or "burn 50 bps".`
-    );
-  }
+  // ── Contextual signals: GAMING ──────────────────────────
+  const gamingSignals = [
+    /\b(?:game|gaming|gamer|play(?:er|ers|ing)?|esport)/,
+    /\b(?:quest|level|xp|exp(?:erience)?|loot|inventory|crafting|spawn)/,
+    /\b(?:in[\s-]*game|p2e|play[\s-]*to[\s-]*earn|earn\s+(?:by|while|through)\s+play)/,
+    /\b(?:nft|avatar|skin|weapon|armor|guild|clan|raid|boss|pvp|pve)\b/,
+    /\b(?:score|leaderboard|rank|achievement|unlock|power[\s-]*up)\b/,
+  ];
+  if (gamingSignals.filter(p => p.test(text)).length >= 1) return "gaming";
 
-  // Supply cap
-  if (!["meme"].includes(category)) {
-    suggestions.push(
-      `📊 **Supply Cap** — Set a hard maximum that can never be exceeded, even with future minting. Signals scarcity and trust. Example: "supply cap 10 million" or "cap at 1 billion".`
-    );
-  }
+  // ── Contextual signals: GOVERNANCE ──────────────────────
+  const govSignals = [
+    /\b(?:decision|decide|choose|elect|represent)/,
+    /\b(?:treasury|budget|allocat|fund\s+(?:management|allocation))/,
+    /\b(?:stakeholder|shareholder|board|committee)/,
+  ];
+  if (govSignals.filter(p => p.test(text)).length >= 1) return "governance";
 
-  // Category — always suggest if not set
-  suggestions.push(
-    `🏷️ **Category** — Tag your token so others can find it. Options: Utility, Governance, Meme, Stablecoin, Impact, Community, Gaming, RWA (real-world asset). ${
-      category !== "utility" ? `Based on your description, "${category}" seems like a good fit.` :
-      `Example: "category governance" or "this is a community token".`
-    }`
-  );
+  // ── Contextual signals: STABLECOIN ──────────────────────
+  if (/\b(?:stable|fixed\s+(?:price|value)|backed\s+by|reserve|collateral|peg(?:ged)?)\b/.test(text)) return "stablecoin";
 
-  // Decimals — for specific use cases
-  if (["stablecoin", "rwa"].includes(category) || /\b(?:price|cent|dollar|fraction|divisib)\b/.test(lower)) {
-    suggestions.push(
-      `🔢 **Decimals** — Controls how finely divisible your token is. 0 = whole units only (good for memberships/votes), 2 = cent-level (like USD), 8 = highly divisible (like BTC), 18 = max precision. Default is 0. Example: "decimals 8" or "make it divisible to 2 decimal places".`
-    );
-  }
+  // ── Contextual signals: RWA ─────────────────────────────
+  if (/\b(?:property|real[\s-]*estate|house|building|land|rental|commodity|gold|silver|oil|stock|equity|bond|share)\b/.test(text)) return "rwa";
 
-  return suggestions;
+  // ── Weak community signal (single match) ────────────────
+  if (communitySignals.filter(p => p.test(text)).length >= 1) return "community";
+
+  // ── Weak utility signals ────────────────────────────────
+  if (/\b(?:utility|service|platform|api|access|tool|infra|protocol|pay(?:ment)?|transaction|fee)\b/.test(text)) return "utility";
+
+  // ── Name-based heuristics (last resort) ─────────────────
+  // If the token name itself is an animal, food, or silly word → probably meme
+  const nameLower = name.toLowerCase().replace(/[^a-z]/g, "");
+  const memeNames = /^(cat|dog|doge|shib|pepe|frog|moon|inu|floki|bonk|wojak|chad|mog|popcat|brett|toshi|neiro|turbo|pnut|goat|bome|wif|tremp|hawk|tuah|tummy|belly|chonk)$/;
+  if (memeNames.test(nameLower)) return "meme";
+
+  return "utility"; // safe default
 }
 
 /**
  * Generate 3–4 ticker suggestions from a token name.
  * Uses first letters, abbreviations, and creative combos.
+ * Handles short single-word names like "abc" by generating variants.
  */
 function generateTickerSuggestions(name: string): string[] {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const suggestions: string[] = [];
+  const firstWord = words[0].toUpperCase().replace(/[^A-Z]/g, "");
+
+  // The exact name uppercased (if it's short enough to be a ticker itself)
+  if (firstWord.length >= 2 && firstWord.length <= 5) {
+    suggestions.push(firstWord);
+  }
 
   // First letters of each word (e.g. "Alpha Gold" → "AG")
   if (words.length >= 2) {
     const initials = words.map(w => w[0].toUpperCase()).join("");
-    if (initials.length >= 2 && initials.length <= 5) suggestions.push(initials);
+    if (initials.length >= 2 && initials.length <= 5 && !suggestions.includes(initials)) {
+      suggestions.push(initials);
+    }
   }
 
   // First 3-4 chars of first word (e.g. "AlphaGold" → "ALPH")
-  const firstWord = words[0].toUpperCase().replace(/[^A-Z]/g, "");
-  if (firstWord.length >= 4) suggestions.push(firstWord.slice(0, 4));
-  if (firstWord.length >= 3 && !suggestions.includes(firstWord.slice(0, 3))) {
-    suggestions.push(firstWord.slice(0, 3));
+  if (firstWord.length >= 4) {
+    const s4 = firstWord.slice(0, 4);
+    if (!suggestions.includes(s4)) suggestions.push(s4);
+  }
+  if (firstWord.length >= 3) {
+    const s3 = firstWord.slice(0, 3);
+    if (!suggestions.includes(s3)) suggestions.push(s3);
   }
 
   // First word initial + second word start (e.g. "Alpha Gold" → "AGLD")
@@ -858,6 +1124,19 @@ function generateTickerSuggestions(name: string): string[] {
       const combo = words[0][0].toUpperCase() + w2.slice(0, 3);
       if (!suggestions.includes(combo)) suggestions.push(combo);
     }
+  }
+
+  // For short names, generate creative variants so there's always 3+ options
+  if (suggestions.length < 3 && firstWord.length <= 4) {
+    // Doubled last letter (e.g. "ABC" → "ABCC") — crypto style
+    const doubled = firstWord + firstWord[firstWord.length - 1];
+    if (doubled.length <= 5 && !suggestions.includes(doubled)) suggestions.push(doubled);
+    // Add "X" suffix (e.g. "ABC" → "ABCX")
+    const xSuffix = firstWord + "X";
+    if (xSuffix.length <= 5 && !suggestions.includes(xSuffix)) suggestions.push(xSuffix);
+    // Reversed (e.g. "ABC" → "CBA")
+    const reversed = firstWord.split("").reverse().join("");
+    if (reversed !== firstWord && reversed.length <= 5 && !suggestions.includes(reversed)) suggestions.push(reversed);
   }
 
   // Deduplicate and cap at 4
@@ -915,28 +1194,64 @@ function extractTokenFields(
   const text = message;
 
   // ── Symbol ────────────────────────────────────────────────
-  // "symbol VIBE", "ticker TEST", "symbol is ABC"
-  const symbolMatch = text.match(
-    /\b(?:symbol|ticker)\s+(?:is\s+|=\s+|should\s+be\s+|will\s+be\s+|as\s+)?([A-Za-z][A-Za-z0-9]{0,9})\b/i
-  );
-  if (symbolMatch) {
-    fields.symbol = symbolMatch[1].toUpperCase();
+  const SYMBOL_STOPWORDS = new Set([
+    "YES", "NO", "OK", "OKAY", "SURE", "FINE", "GOOD", "GREAT", "NICE",
+    "COOL", "DONE", "SKIP", "NAH", "NOPE", "PASS", "THE", "FOR", "AND",
+    "WORKS", "SOUNDS", "LETS", "THAT", "THIS", "WITH", "JUST", "USE",
+    "AS", "IS", "IT", "MY", "OR", "BE", "TO", "OF", "IN", "ON", "AT",
+    "HAVE", "HAS", "HAD", "DO", "DOES", "DID", "WILL", "CAN", "MAY",
+    "SET", "GET", "PUT", "ADD", "NOT", "BUT", "HOW", "WHAT", "WHEN",
+  ]);
+
+  // HIGHEST PRIORITY: "$XYZ" anywhere in message — dollar sign is strongest signal
+  const dollarMatch = text.match(/\$([A-Za-z][A-Za-z0-9]{0,9})\b/i);
+  if (dollarMatch && !SYMBOL_STOPWORDS.has(dollarMatch[1].toUpperCase())) {
+    fields.symbol = dollarMatch[1].toUpperCase();
   }
 
-  // Bare symbol — if user just types "AGLD" or "$AGLD" in the symbol step
-  // Only match when we already have a name but no symbol
+  // "ticker $JEM", "symbol $ABC", "ticker as $JEM", "symbol is $ABC"
+  if (!fields.symbol) {
+    const tickerDollarMatch = text.match(
+      /\b(?:symbol|ticker)\s+(?:is\s+|=\s+|should\s+be\s+|will\s+be\s+|as\s+)?\$([A-Za-z][A-Za-z0-9]{0,9})\b/i
+    );
+    if (tickerDollarMatch && !SYMBOL_STOPWORDS.has(tickerDollarMatch[1].toUpperCase())) {
+      fields.symbol = tickerDollarMatch[1].toUpperCase();
+    }
+  }
+
+  // "symbol VIBE", "ticker TEST", "symbol is ABC" (no $ prefix)
+  if (!fields.symbol) {
+    const symbolMatch = text.match(
+      /\b(?:symbol|ticker)\s+(?:is\s+|=\s+|should\s+be\s+|will\s+be\s+|as\s+)?([A-Za-z][A-Za-z0-9]{0,9})\b/i
+    );
+    if (symbolMatch && !SYMBOL_STOPWORDS.has(symbolMatch[1].toUpperCase())) {
+      fields.symbol = symbolMatch[1].toUpperCase();
+    }
+  }
+
+  // "XYZ for the ticker/symbol"
+  if (!fields.symbol) {
+    const reverseMatch = text.match(
+      /\$?([A-Za-z][A-Za-z0-9]{0,9})\s+(?:for|as)\s+(?:the\s+)?(?:ticker|symbol)\b/i
+    );
+    if (reverseMatch && !SYMBOL_STOPWORDS.has(reverseMatch[1].toUpperCase())) {
+      fields.symbol = reverseMatch[1].toUpperCase();
+    }
+  }
+
+  // Bare symbol — "AGLD" or "xyz" alone in the symbol step
   if (!fields.symbol && currentForm?.name && !currentForm?.symbol) {
     const bare = text.trim().replace(/^\$/, "");
-    const bareSymbolMatch = bare.match(/^([A-Z][A-Z0-9]{1,9})$/);
-    if (bareSymbolMatch) {
-      fields.symbol = bareSymbolMatch[1];
+    const bareSymbolMatch = bare.match(/^([A-Za-z][A-Za-z0-9]{1,9})$/i);
+    if (bareSymbolMatch && !SYMBOL_STOPWORDS.has(bareSymbolMatch[1].toUpperCase())) {
+      fields.symbol = bareSymbolMatch[1].toUpperCase();
     }
   }
 
   // ── Name ──────────────────────────────────────────────────
   // "called Vibe Token", "named Cool Coin", "token name is ..."
   const nameMatch = text.match(
-    /\b(?:called|named|name(?:\s+is)?)\s+([A-Za-z][A-Za-z0-9 _-]{0,62}?)(?=\s+(?:with|symbol|ticker|supply|decimals?|and)\b|[.,!?]|$)/i
+    /\b(?:called?|named?|name(?:\s+is)?|call\s+(?:it|the\s+token))\s+([A-Za-z][A-Za-z0-9 _-]{0,62}?)(?=\s+(?:with|symbol|ticker|supply|decimals?|and)\b|[.,!?]|$)/i
   );
   if (nameMatch) {
     fields.name = nameMatch[1].trim();
@@ -947,8 +1262,9 @@ function extractTokenFields(
   if (!fields.name && !currentForm?.name && !fields.symbol) {
     const bare = text.trim();
     // Match 1-4 words, capitalized or mixed case, no special chars beyond spaces/hyphens
-    const bareNameMatch = bare.match(/^([A-Z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*){0,3})$/);
-    if (bareNameMatch && bare.length >= 2 && bare.length <= 64) {
+    const bareNameMatch = bare.match(/^([A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*){0,3})$/i);
+    const fillerWords = /^(yes|no|ok|okay|sure|yeah|yep|nah|nope|hi|hey|hello|thanks|thank|please|help|idk|maybe|hmm|lol|wow|cool|nice|great|good|fine|skip|next|go|start|done|cancel|stop|back|reset|quit)$/i;
+    if (bareNameMatch && bare.length >= 2 && bare.length <= 64 && !fillerWords.test(bare)) {
       fields.name = bareNameMatch[1].trim();
     }
   }
@@ -961,9 +1277,11 @@ function extractTokenFields(
     /\b(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\s+(?:initial\s+)?supply\b/i,
     /\bmint\s+(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\b/i,
     /\bwith\s+(\d+(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\s+(?:tokens?|supply|coins?)?\b/i,
-    // Bare number — for guided flow where user just types "1000000" or "10 million"
+    // Bare number — for guided flow where user just types "1000000" or "10 million" or "1 billion please"
     /^[\s]*(\d[\d,]*(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?[\s]*$/i,
     /^[\s]*(\d[\d,]*(?:\.\d+)?)\s*(million|mil|m|billion|bil|b|thousand|k)?\s+(?:tokens?|coins?)?[\s]*$/i,
+    // Number + magnitude suffix anywhere in text (e.g. "1 billion please", "let's do 500 million")
+    /\b(\d[\d,]*(?:\.\d+)?)\s*(million|mil|billion|bil|thousand)\b/i,
   ];
   for (const pattern of supplyPatterns) {
     const match = text.match(pattern);
@@ -1082,6 +1400,19 @@ function extractTokenFields(
     if (bare.length >= 10 && bare.length <= 500 && /\s/.test(bare) &&
         !/^\d+\s*(million|mil|m|billion|bil|b|thousand|k)?$/i.test(bare)) {
       fields.description = bare;
+    }
+  }
+
+  // ── Feature modifications: "remove burn" / "no echo" / "add 3% burn" / etc ──
+  // These can happen at any point during token creation
+  if (currentForm?.name) {
+    // "remove burn", "no burn", "disable burn", "0 burn"
+    if (/\b(?:remove|no|disable|drop|skip|without)\s*burn\b/i.test(text)) {
+      fields.burnRate = "0";
+    }
+    // "remove echo", "no echo", "disable echo"
+    if (/\b(?:remove|no|disable|drop|skip|without)\s*echo\b/i.test(text)) {
+      fields.echoRate = "0";
     }
   }
 

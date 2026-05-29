@@ -1,9 +1,20 @@
 "use client";
-import React, { useEffect, useState } from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 
+type Shape = number[][];
+type Piece = {
+  id: number;
+  shape: Shape;
+  left: number;
+  delay: number;
+  duration: number;
+  scale: number;
+  rotation: number;
+};
+
 // Tetris shapes represented by grids
-const SHAPES = [
+const SHAPES: Shape[] = [
   // Square
   [[1,1], [1,1]],
   // Line
@@ -16,24 +27,25 @@ const SHAPES = [
   [[0,1,1], [1,1,0]]
 ];
 
-export function TetrisGlassFall() {
-  const [pieces, setPieces] = useState<any[]>([]);
+function seededValue(pieceIndex: number, salt: number): number {
+  const value = Math.sin((pieceIndex + 1) * (salt + 17)) * 10000;
+  return value - Math.floor(value);
+}
 
-  useEffect(() => {
-    // Generate random pieces
-    const generated = Array.from({ length: 12 }).map((_, i) => {
-      const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+export function TetrisGlassFall() {
+  const pieces = useMemo<Piece[]>(() => {
+    return Array.from({ length: 16 }).map((_, i) => {
+      const shape = SHAPES[Math.floor(seededValue(i, 1) * SHAPES.length)];
       return {
         id: i,
         shape,
-        left: 5 + Math.random() * 90, // random start horizontal position (vw)
-        delay: Math.random() * 20, // random delay up to 20s
-        duration: 15 + Math.random() * 25, // slow fall duration between 15s and 40s
-        scale: 0.6 + Math.random() * 1.5, // random size scale
-        rotation: Math.floor(Math.random() * 4) * 90, // rotate by 90 deg increments
+        left: 5 + seededValue(i, 2) * 90,
+        delay: i < 4 ? 0 : seededValue(i, 3) * 8,
+        duration: 15 + seededValue(i, 4) * 25,
+        scale: 0.6 + seededValue(i, 5) * 1.5,
+        rotation: Math.floor(seededValue(i, 6) * 4) * 90,
       };
     });
-    setPieces(generated);
   }, []);
 
   return (

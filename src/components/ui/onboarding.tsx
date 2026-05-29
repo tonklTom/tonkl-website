@@ -314,7 +314,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         disabled={!seedRevealed}
         className="w-full py-5 bg-white/10 backdrop-blur-md border border-white/20 text-white font-medium rounded-2xl hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 shadow-[0_0_20px_rgba(255,255,255,0.05)] group"
       >
-        <span className="group-hover:scale-105 inline-block transition-transform">I've written it down safely</span>
+        <span className="group-hover:scale-105 inline-block transition-transform">I&apos;ve written it down safely</span>
       </button>
     </motion.div>
   );
@@ -333,7 +333,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }) {
         </div>
         <h2 className="text-4xl font-serif font-light text-white mb-4 tracking-wide">Verify Backup</h2>
         <p className="text-white/50 font-light max-w-sm mx-auto leading-relaxed">
-          Let's make sure you wrote it down correctly. Enter the requested words below.
+          Let&apos;s make sure you wrote it down correctly. Enter the requested words below.
         </p>
       </div>
 

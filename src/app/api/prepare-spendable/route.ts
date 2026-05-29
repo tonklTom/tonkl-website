@@ -9,7 +9,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
-import { requireSession } from "@/lib/session";
+import { requireSession, getSessionPassphrase } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -86,9 +86,19 @@ export async function POST(request: Request) {
     );
   }
 
+  // Use session passphrase for encrypted wallets
+  const passphrase = getSessionPassphrase(request) || body.passphrase;
+
+  // Scan chain to discover incoming notes before checking
+  try {
+    await runScan(passphrase);
+  } catch {
+    // Non-fatal — continue
+  }
+
   try {
     const leafCount = await getNodeLeafCount();
-    const notes = await getLiveNotes(assetId, leafCount, body.passphrase);
+    const notes = await getLiveNotes(assetId, leafCount, passphrase);
     const positiveNotes = notes.filter((note) => note.value > 0);
     const zeroNotes = notes.filter((note) => note.value === 0);
 
@@ -111,7 +121,7 @@ export async function POST(request: Request) {
     }
 
     const note = positiveNotes[0];
-    const output = await runSplit(note.id, note.value, assetId, body.passphrase);
+    const output = await runSplit(note.id, note.value, assetId, passphrase);
     const txHash = extractTxHash(output);
 
     return Response.json({
@@ -302,6 +312,10 @@ function runWallet(
       resolve(stdout.trim());
     });
   });
+}
+
+function runScan(passphrase?: string): Promise<string> {
+  return runWallet(["scan"], 30_000, passphrase);
 }
 
 function extractTxHash(output: string): string | null {

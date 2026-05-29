@@ -10,13 +10,17 @@ const nextConfig: NextConfig = {
     ],
   },
   async redirects() {
-    return [
-      {
-        source: "/",
-        destination: "/waitlist",
-        permanent: false,
-      },
-    ];
+    // Only redirect to waitlist in production (on tonkl.com)
+    if (process.env.NODE_ENV === "production") {
+      return [
+        {
+          source: "/",
+          destination: "/waitlist",
+          permanent: false,
+        },
+      ];
+    }
+    return [];
   },
 };
 

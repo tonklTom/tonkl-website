@@ -145,6 +145,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // ── Sync faucet wallet before sending ────────────────────────
+  try {
+    await syncFaucetWallet();
+  } catch {
+    // Non-fatal — continue with send attempt
+  }
+
   // ── Dispense tokens ─────────────────────────────────────────
   try {
     const result = await runFaucet(recipientKey.pkX, recipientKey.pkY, FAUCET_AMOUNT, recipientKey.scanPk);
@@ -296,6 +303,32 @@ function runWalletCommand(extraArgs: string[], dbPath?: string): Promise<string>
       }
       resolve(stdout.trim());
     });
+  });
+}
+
+async function syncFaucetWallet(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
+    if (FAUCET_DB) args.push("--db", FAUCET_DB);
+    args.push("scan");
+
+    const safeEnv: NodeJS.ProcessEnv = {
+      PATH: `${process.env.NARGO_PATH || ""}:${process.env.PATH || "/usr/bin:/usr/local/bin"}`.replace(/^:/, ""),
+      HOME: process.env.HOME || "/tmp",
+      LANG: process.env.LANG || "en_US.UTF-8",
+      NODE_ENV: process.env.NODE_ENV,
+    };
+    if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
+    if (process.env.TONKL_RPC_SECRET) safeEnv.TONKL_RPC_SECRET = process.env.TONKL_RPC_SECRET;
+
+    const child = spawn(PYTHON, args, {
+      stdio: ["ignore", "pipe", "pipe"] as const,
+      env: safeEnv,
+    });
+
+    const timeout = setTimeout(() => { child.kill("SIGTERM"); reject(new Error("Scan timed out")); }, 10_000);
+    child.on("close", () => { clearTimeout(timeout); resolve(); }); // non-fatal
+    child.on("error", () => { clearTimeout(timeout); resolve(); }); // non-fatal
   });
 }
 

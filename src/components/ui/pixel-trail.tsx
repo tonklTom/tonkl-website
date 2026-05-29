@@ -1,8 +1,7 @@
 "use client";
 
-import React, { useCallback, useMemo, useRef } from "react"
+import React, { useCallback, useId, useMemo, useRef } from "react"
 import { motion, useAnimationControls } from "framer-motion"
-import { v4 as uuidv4 } from "uuid"
 
 import { cn } from "@/lib/utils"
 import { useDimensions } from "@/hooks/use-debounced-dimensions"
@@ -15,6 +14,10 @@ interface PixelTrailProps {
   pixelClassName?: string
 }
 
+type PixelElement = HTMLDivElement & {
+  __animatePixel?: () => void
+}
+
 const PixelTrail: React.FC<PixelTrailProps> = ({
   pixelSize = 20,
   fadeDuration = 500,
@@ -24,7 +27,7 @@ const PixelTrail: React.FC<PixelTrailProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const dimensions = useDimensions(containerRef)
-  const trailId = useRef(uuidv4())
+  const trailId = useId().replace(/:/g, "")
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -35,14 +38,13 @@ const PixelTrail: React.FC<PixelTrailProps> = ({
       const y = Math.floor((e.clientY - rect.top) / pixelSize)
 
       const pixelElement = document.getElementById(
-        `${trailId.current}-pixel-${x}-${y}`
+        `${trailId}-pixel-${x}-${y}`
       )
       if (pixelElement) {
-        const animatePixel = (pixelElement as any).__animatePixel
-        if (animatePixel) animatePixel()
+        ;(pixelElement as PixelElement).__animatePixel?.()
       }
     },
-    [pixelSize]
+    [pixelSize, trailId]
   )
 
   const columns = useMemo(
@@ -68,7 +70,7 @@ const PixelTrail: React.FC<PixelTrailProps> = ({
           {Array.from({ length: columns }).map((_, colIndex) => (
             <PixelDot
               key={`${colIndex}-${rowIndex}`}
-              id={`${trailId.current}-pixel-${colIndex}-${rowIndex}`}
+              id={`${trailId}-pixel-${colIndex}-${rowIndex}`}
               size={pixelSize}
               fadeDuration={fadeDuration}
               delay={delay}
@@ -104,7 +106,7 @@ const PixelDot: React.FC<PixelDotProps> = React.memo(
     const ref = useCallback(
       (node: HTMLDivElement | null) => {
         if (node) {
-          ;(node as any).__animatePixel = animatePixel
+          ;(node as PixelElement).__animatePixel = animatePixel
         }
       },
       [animatePixel]

@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   X, Maximize2, Minimize2, Ban, ShieldCheck, Loader2,
   CheckCircle, AlertTriangle, Sparkles, Shield, Pencil,
-  ChevronUp, Coins,
+  ChevronUp, ImagePlus,
 } from "lucide-react";
 import { PromptInputBox } from "@/components/ui/ai-prompt-box";
 import SiriOrb from "@/components/ui/siri-orb";
@@ -38,6 +38,7 @@ type TokenFormData = {
   burnRate: string;
   echoRate: string;
   echoRecipient: string;
+  _askedAdvanced?: boolean;
 };
 
 type CreatedToken = {
@@ -119,7 +120,7 @@ const CATEGORIES: TokenCategory[] = [
 
 const DEFAULT_FORM: TokenFormData = {
   symbol: "", name: "", description: "", category: "Utility",
-  decimals: 0, initialSupply: "1000000", supplyCap: "",
+  decimals: 0, initialSupply: "", supplyCap: "",
   website: "", twitter: "", discord: "", telegram: "",
   github: "", creatorStatement: "", burnRate: "0",
   echoRate: "0", echoRecipient: "",
@@ -344,7 +345,9 @@ export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklA
       }
 
       const updatedForm = extracted ? { ...tokenForm, ...extracted } : tokenForm;
-      const hasEnoughForPreview = updatedForm.symbol && updatedForm.name && updatedForm.initialSupply;
+      // Only show the preview card when the guided flow has finished all steps
+      // and the API reply contains the summary with the "Create Token" prompt
+      const isReadyForPreview = reply.includes("Create Token") && (reply.includes("preview") || reply.includes("summary"));
       const isTokenIntent =
         data?.payload?.intent === "create_token" ||
         data?.payload?.intent === "update_token_creation" ||
@@ -355,7 +358,7 @@ export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklA
         setTokenFlowActive(true);
       }
 
-      if (isTokenIntent && hasEnoughForPreview) {
+      if (isTokenIntent && isReadyForPreview) {
         setMessages((prev) => [
           ...prev,
           {
@@ -377,7 +380,9 @@ export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklA
             text: reply,
             isUser: false,
             kind: (data?.kind as MessageKind) || (response.ok ? "text" : "error"),
-            preview: data?.preview || null,
+            // Suppress the generic preview card during the guided token creation flow
+            // — the user only needs the DexScreener-style card at the end
+            preview: (context === "token_creation" ? null : data?.preview) || null,
             executionEnabled: Boolean(data?.executionEnabled),
             modelStatus: data?.modelStatus || "unknown",
             modelName: data?.modelName || null,
@@ -438,7 +443,6 @@ export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklA
                 <motion.div
                   key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   className={`flex-1 overflow-y-auto p-4 space-y-4 ${isFullscreen ? "px-12" : "px-4"}`}
-                  style={{ filter: "url(#chat-gooey-filter)" }}
                 >
                   {messages.map((msg) => (
                     <motion.div
@@ -595,6 +599,27 @@ export function TonklAIChatOverlay({ isOpen, onClose, embedded = false }: TonklA
 
 // ─── Token Preview Card ────────────────────────────────────────
 
+function generateTokenColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 70%, 55%)`;
+}
+
+function generateChartHeights(seedText: string): number[] {
+  let seed = 0;
+  for (let i = 0; i < seedText.length; i++) {
+    seed = (seed * 31 + seedText.charCodeAt(i)) >>> 0;
+  }
+
+  return Array.from({ length: 30 }, (_, i) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const noise = (seed % 1000) / 1000;
+    const trend = (i / 30) * 15;
+    return Math.max(8, Math.min(42, 12 + Math.sin(i * 0.5) * 6 + noise * 8 + trend));
+  });
+}
+
 function TokenPreviewCard({
   msg, isFullscreen, isCreating, onConfirm, onEdit,
 }: {
@@ -605,62 +630,157 @@ function TokenPreviewCard({
   onEdit: (field: string, value: string | number) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const form = msg.tokenForm || {};
   const { score, missing } = getCompleteness(form);
+  const symbol = (form.symbol as string || "???").toUpperCase();
+  const name = (form.name as string) || "Unnamed Token";
+  const supply = form.initialSupply ? parseInt(form.initialSupply as string) : 0;
+  const color = generateTokenColor(name);
+  const initials = symbol.slice(0, 2);
+  const hasBurn = form.burnRate && parseInt(form.burnRate as string) > 0;
+  const hasEcho = form.echoRate && parseInt(form.echoRate as string) > 0;
+  const hasSupplyCap = form.supplyCap && parseInt(form.supplyCap as string) > 0;
+  const chartHeights = generateChartHeights(`${name}:${symbol}`);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return; // 2MB max
+    const reader = new FileReader();
+    reader.onload = () => setLogoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+  };
 
   return (
-    <div className="max-w-[85%] rounded-2xl rounded-bl-none overflow-hidden border border-cyan-500/20 bg-gradient-to-br from-cyan-500/5 to-purple-500/5 shadow-lg">
-      <div className="p-4 pb-0">
-        <p className={`${isFullscreen ? "text-base" : "text-sm"} text-white/80 whitespace-pre-wrap`}>{msg.text}</p>
+    <div className="max-w-[90%] rounded-2xl rounded-bl-none overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-2xl">
+      {/* Header bar */}
+      <div className="px-4 py-2.5 bg-white/[0.03] border-b border-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+          <span className="text-[10px] text-white/40 font-mono uppercase tracking-widest">Tonkl Token Preview</span>
+        </div>
+        <span className="text-[10px] text-white/25 font-mono">TESTNET</span>
       </div>
 
-      <div className="p-4">
-        {/* Token header */}
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 border border-white/10 flex items-center justify-center">
-            <Coins className="w-6 h-6 text-cyan-400" />
+      {/* Token hero section */}
+      <div className="p-5">
+        <div className="flex items-start gap-4 mb-5">
+          {/* Token logo — clickable to upload */}
+          <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" className="hidden" onChange={handleLogoUpload} />
+          <div className="shrink-0 flex flex-col items-center gap-1">
+            <button
+              onClick={() => logoInputRef.current?.click()}
+              className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-bold shadow-lg relative group overflow-hidden transition-all hover:ring-2 hover:ring-white/20 cursor-pointer"
+              style={logoPreview ? {} : { background: `linear-gradient(135deg, ${color}, ${color}88)`, color: "white", textShadow: "0 1px 2px rgba(0,0,0,0.3)" }}
+              title="Click to upload a logo"
+            >
+              {logoPreview ? (
+                <img src={logoPreview} alt="Token logo" className="w-full h-full object-cover rounded-2xl" />
+              ) : (
+                <>
+                  {initials}
+                  <div className="absolute inset-0 bg-black/30 flex items-end justify-center pb-1 rounded-2xl">
+                    <ImagePlus className="w-3.5 h-3.5 text-white/70" />
+                  </div>
+                </>
+              )}
+              {logoPreview && (
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-2xl">
+                  <ImagePlus className="w-5 h-5 text-white/80" />
+                </div>
+              )}
+            </button>
+            {!logoPreview && (
+              <button onClick={() => logoInputRef.current?.click()} className="text-[9px] text-white/30 hover:text-white/50 transition-colors cursor-pointer">
+                add logo
+              </button>
+            )}
           </div>
-          <div>
-            <h3 className="text-lg font-medium text-white">{form.name || "Unnamed Token"}</h3>
-            <p className="text-cyan-400 font-mono text-sm">{form.symbol || "???"}</p>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <h3 className={`${isFullscreen ? "text-xl" : "text-lg"} font-semibold text-white truncate`}>{name}</h3>
+              {score === 100 && <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0" />}
+            </div>
+            <p className="text-white/50 font-mono text-sm">${symbol}</p>
           </div>
-          <div className="ml-auto">
-            <div className="relative w-10 h-10">
-              <svg className="w-10 h-10 -rotate-90" viewBox="0 0 36 36">
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#333" strokeWidth="2" />
-                <circle cx="18" cy="18" r="15.9" fill="none"
-                  stroke={score === 100 ? "#22d3ee" : score >= 50 ? "#eab308" : "#ef4444"}
-                  strokeWidth="2" strokeDasharray={`${score} ${100 - score}`} strokeLinecap="round" />
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-[10px] text-white/60 font-medium">{score}%</span>
+          {/* Category badge */}
+          {form.category && (
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-medium uppercase tracking-wider border shrink-0"
+              style={{ borderColor: `${color}40`, color: `${color}`, background: `${color}10` }}>
+              {form.category as string}
+            </span>
+          )}
+        </div>
+
+        {/* Mock price display */}
+        <div className="mb-5 p-4 rounded-xl bg-white/[0.02] border border-white/5">
+          <div className="flex items-end gap-3 mb-2">
+            <span className={`${isFullscreen ? "text-3xl" : "text-2xl"} font-bold text-white font-mono`}>
+              ${supply > 0 ? (1000000 / supply).toFixed(supply > 1000000 ? 6 : 4) : "0.00"}
+            </span>
+            <span className="text-green-400 text-sm font-mono mb-1">New listing</span>
+          </div>
+          {/* Mini chart placeholder */}
+          <div className="h-12 w-full rounded-lg bg-white/[0.02] border border-white/5 flex items-end px-2 pb-1 gap-[2px]">
+            {chartHeights.map((h, i) => (
+              <div key={i} className="flex-1 rounded-t-sm" style={{ height: `${h}%`, background: `${color}60` }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Token stats grid */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <StatBlock label="Total Supply" value={supply > 0 ? supply.toLocaleString() : "0"} sub={`$${symbol}`} />
+          <StatBlock label="Market Cap" value={supply > 0 ? `$${(1000000).toLocaleString()}` : "$0"} sub="Estimated" />
+          <StatBlock label="Decimals" value={String(form.decimals ?? 0)} sub="Precision" />
+          <StatBlock label="Metadata" value={`${score}%`} sub={score === 100 ? "Verified" : "Standard"} color={score === 100 ? "#22d3ee" : "#eab308"} />
+        </div>
+
+        {/* On-chain features */}
+        {(hasBurn || hasEcho || hasSupplyCap) && (
+          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5">
+            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2 font-medium">On-Chain Features</p>
+            <div className="flex flex-wrap gap-2">
+              {hasBurn && (
+                <span className="px-2.5 py-1 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-mono">
+                  Burn {(parseInt(form.burnRate as string) / 100).toFixed(2)}%
+                </span>
+              )}
+              {hasEcho && (
+                <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-mono">
+                  Echo {(parseInt(form.echoRate as string) / 100).toFixed(2)}%
+                </span>
+              )}
+              {hasSupplyCap && (
+                <span className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-mono">
+                  Cap {parseInt(form.supplyCap as string).toLocaleString()}
+                </span>
+              )}
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Key fields */}
-        <div className="grid grid-cols-2 gap-2 mb-3">
-          {form.category && <FieldChip label="Category" value={form.category as string} />}
-          {form.initialSupply && parseInt(form.initialSupply as string) > 0 && (
-            <FieldChip label="Supply" value={parseInt(form.initialSupply as string).toLocaleString()} />
-          )}
-          <FieldChip label="Decimals" value={String(form.decimals ?? 0)} />
-          {form.burnRate && parseInt(form.burnRate as string) > 0 && (
-            <FieldChip label="Burn" value={`${(parseInt(form.burnRate as string) / 100).toFixed(2)}%`} />
-          )}
-        </div>
+        {/* Description */}
+        {form.description && (
+          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5">
+            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-1.5 font-medium">About</p>
+            <p className="text-white/60 text-sm leading-relaxed">{form.description as string}</p>
+          </div>
+        )}
 
-        {form.description && <p className="text-white/40 text-xs mb-3">{form.description as string}</p>}
-
+        {/* Missing fields hint */}
         {missing.length > 0 && (
-          <div className="mb-3 p-2 rounded-lg bg-yellow-500/5 border border-yellow-500/15">
-            <p className="text-yellow-400/70 text-xs">Optional: {missing.join(", ")}</p>
+          <div className="mb-4 p-2.5 rounded-lg bg-yellow-500/5 border border-yellow-500/10">
+            <p className="text-yellow-400/60 text-xs">Optional fields: {missing.join(", ")}</p>
           </div>
         )}
 
         {/* Edit toggle */}
-        <button onClick={() => setIsEditing(!isEditing)} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 transition-colors mb-3">
+        <button onClick={() => setIsEditing(!isEditing)} className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/50 transition-colors mb-4">
           {isEditing ? <ChevronUp className="w-3 h-3" /> : <Pencil className="w-3 h-3" />}
-          {isEditing ? "Close editor" : "Edit details"}
+          {isEditing ? "Close editor" : "Edit details before minting"}
         </button>
 
         <AnimatePresence>
@@ -671,48 +791,38 @@ function TokenPreviewCard({
           )}
         </AnimatePresence>
 
-        {/* Risk assessment */}
-        <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 mb-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Shield className="w-3 h-3 text-cyan-400" />
-            <span className="text-[10px] text-white/50 font-medium uppercase tracking-wider">Risk Assessment</span>
-          </div>
-          {score === 100 ? (
-            <p className="text-green-400 text-xs flex items-center gap-1">
-              <CheckCircle className="w-3 h-3" /> Metadata complete — eligible for Verified tier
-            </p>
-          ) : (
-            <p className="text-yellow-400 text-xs flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" /> Metadata {score}% — Standard tier
-            </p>
-          )}
-        </div>
-
-        <p className="text-white/25 text-[11px] mb-4">
-          {parseInt(form.initialSupply as string) > 0
-            ? "This will generate a ZK proof to register and mint. May take 30-60 seconds."
-            : "This will register the token on-chain. No tokens minted yet."}
+        {/* ZK proof note */}
+        <p className="text-white/20 text-[11px] mb-4 text-center">
+          Minting generates a ZK proof on-chain. This takes 30-60 seconds.
         </p>
 
         {/* Create button */}
         <button
           onClick={onConfirm}
           disabled={isCreating || !form.symbol || !form.name}
-          className="w-full py-2.5 bg-cyan-500 disabled:bg-white/10 text-black disabled:text-white/30 font-medium rounded-xl hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2 text-sm"
+          className="w-full py-3 font-semibold rounded-xl flex items-center justify-center gap-2 text-sm transition-all"
+          style={isCreating || !form.symbol || !form.name
+            ? { background: "#222", color: "#555" }
+            : { background: `linear-gradient(135deg, ${color}, ${color}cc)`, color: "white", boxShadow: `0 4px 20px ${color}30` }
+          }
         >
           {isCreating ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Creating...</>
+            <><Loader2 className="w-4 h-4 animate-spin" /> Generating ZK Proof...</>
           ) : (
-            <><Sparkles className="w-4 h-4" /> Create Token</>
+            <><Sparkles className="w-4 h-4" /> Create ${symbol} on Tonkl</>
           )}
         </button>
       </div>
+    </div>
+  );
+}
 
-      {msg.modelStatus && (
-        <div className="px-4 pb-2">
-          <p className="text-[10px] uppercase tracking-wide text-cyan-100/35">{formatModelStatus(msg.modelStatus, msg.modelName)}</p>
-        </div>
-      )}
+function StatBlock({ label, value, sub, color }: { label: string; value: string; sub: string; color?: string }) {
+  return (
+    <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5">
+      <p className="text-[10px] text-white/30 uppercase tracking-widest mb-1">{label}</p>
+      <p className="text-white font-mono font-semibold text-sm" style={color ? { color } : {}}>{value}</p>
+      <p className="text-white/25 text-[10px] font-mono">{sub}</p>
     </div>
   );
 }
@@ -884,15 +994,6 @@ function GenericPreviewCard({ preview, executionEnabled, isCancelled, onCancel }
 }
 
 // ─── Utility ───────────────────────────────────────────────────
-
-function FieldChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/5">
-      <p className="text-[9px] text-white/30 uppercase tracking-wider">{label}</p>
-      <p className="text-xs text-white/70 font-mono">{value}</p>
-    </div>
-  );
-}
 
 function RiskBadge({ score }: { score: RiskScore }) {
   const c = { low: "green", medium: "yellow", high: "orange", critical: "red" }[score];
