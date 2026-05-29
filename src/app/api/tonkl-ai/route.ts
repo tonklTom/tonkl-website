@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
 import { validateSession } from "@/lib/session";
+import { maskSecretText } from "@/lib/secret-mask";
 
 export const runtime = "nodejs";
 
@@ -151,52 +152,61 @@ export async function POST(request: Request) {
     if (context === "token_creation" && !isExiting) {
       const extracted = extractTokenFields(message, currentForm);
 
-      const hasExtracted = Object.keys(extracted).length > 0;
-
-      if (hasExtracted) {
-        if (!payload.execution) {
-          payload.execution = { ok: true, message: "Fields extracted from conversation.", data: {} };
-        }
-        if (!payload.execution.data) {
-          payload.execution.data = {} as TonklAIExecutionData;
-        }
-        (payload.execution.data as Record<string, unknown>).extracted_fields = extracted;
-      }
-
       // Determine what the guided flow needs next
       const merged = { ...(currentForm || {}), ...extracted };
       const nextField = getNextMissingField(merged);
-      const llmAvailable = payload.model?.ok && payload.model?.text;
 
-      // Strategy: server-side templates drive the flow structure (what to ask next).
-      // If the LLM is available, use its first 1-2 sentences as a natural acknowledgment
-      // of what the user said, then append the template's question for the next field.
-      // This gives us: natural conversation + reliable extraction + correct flow order.
+      // Template reply as fallback (always available)
       const guidedReply = buildTokenCreationReply(extracted, currentForm);
 
-      if (llmAvailable && nextField !== "done" && nextField !== "features") {
-        // Extract just the LLM's acknowledgment (first 1-2 sentences) — skip its
-        // rambling or incorrect field questions since the template handles that
-        const llmAck = extractAcknowledgment(payload.model!.text!);
-        const hint = getFieldHint(nextField, merged);
-        // If the LLM acknowledged something useful, prepend it
-        if (llmAck && llmAck.length > 10 && hint) {
-          payload.message = `${llmAck}\n\n${hint}`;
+      // ── LLM-first strategy ──────────────────────────────────
+      // For conversational steps (name, symbol, supply, description), call the LLM
+      // directly with a step-specific system prompt. The LLM writes the full reply.
+      // Template is fallback only if the LLM fails or returns garbage.
+      // For structural steps (features, done), templates are better because the
+      // content is too structured (option lists, preview cards) for an 8B model.
+      if (nextField !== "done" && nextField !== "features") {
+        const stepMessages = buildTokenStepPrompt(nextField, merged, message);
+        if (stepMessages.length > 0) {
+          const llmReply = await callTokenLLM(stepMessages);
+          if (llmReply && llmReply.length > 15 && !llmReply.includes("```")) {
+            // Strip any markdown bold the LLM might add
+            payload.message = llmReply.replace(/\*\*/g, "");
+          } else {
+            payload.message = guidedReply;
+          }
         } else {
           payload.message = guidedReply;
         }
       } else {
-        // For "done" and "features" steps, use the full guided reply
-        // (features step has its own rich formatting; done step shows the preview summary)
+        // Features and done steps use templates (too structured for LLM)
         payload.message = guidedReply;
       }
+
+      // ── LLM-generated description ───────────────────────────
+      // When the description step just completed, try the LLM for the description
+      // text before falling back to the template generator.
+      if (nextField === "features" && extracted.description) {
+        const name = String(merged.name || "");
+        const symbol = String(merged.symbol || "").toUpperCase();
+        const inferredCat = inferCategoryFromDescription(String(extracted.description), name);
+        const llmDesc = await generateLLMDescription(
+          String(extracted.description), name, symbol, inferredCat,
+        );
+        if (llmDesc && llmDesc.length > 30 && llmDesc.length < 500) {
+          // Use LLM description instead of template-generated one
+          extracted.description = llmDesc.replace(/\*\*/g, "");
+          // Rebuild the guided reply with the LLM description
+          payload.message = buildTokenCreationReply(extracted, currentForm);
+        }
+      }
+
       if (payload.model) payload.model.text = payload.message;
 
-      // In token_creation context, ALWAYS force the intent — the LLM might
-      // return "confirmation" or "general" for messages like "looks good"
+      // In token_creation context, ALWAYS force the intent
       payload.intent = "create_token";
 
-      // Make sure extracted fields (including auto-inferred ones) reach frontend
+      // Make sure extracted fields reach frontend
       if (Object.keys(extracted).length > 0) {
         if (!payload.execution) {
           payload.execution = { ok: true, message: "Fields extracted.", data: {} };
@@ -267,11 +277,16 @@ function requiresWalletSession(message: string, context?: string): boolean {
   }
 
   const lower = message.toLowerCase();
+  // Skip wallet check if the message is about creating/designing a token (guided flow doesn't need wallet until mint)
+  if (/\b(?:create|make|design|build|launch)\s+(?:a\s+)?token\b/i.test(lower) ||
+      /\btoken\s+(?:idea|concept|project|creation)\b/i.test(lower)) {
+    return false;
+  }
   return [
     /\b(?:my|wallet|account)\s+(?:balance|balances|assets?|tokens?|notes?|history|transactions?|address)\b/,
-    /\b(?:balance|balances|assets?|tokens?|notes?|history|transactions?)\b/,
+    /\b(?:my|check|show|view)\s+(?:balance|balances|assets?|notes?|history|transactions?)\b/,
     /\b(?:send|transfer|pay|receive|scan|sync|faucet|drip|stake|unstake)\b/,
-    /\b(?:mint|deploy|create)\s+(?:a\s+)?token\b/,
+    /\b(?:mint|deploy)\s+(?:a\s+)?token\b/,
     /\b(?:use|read|check|show)\s+(?:my\s+)?(?:wallet|funds|transactions?|notes?)\b/,
   ].some((pattern) => pattern.test(lower));
 }
@@ -639,6 +654,127 @@ function trimReadOnlySummary(value: string): string {
     : trimmed;
 }
 
+// ─── Direct LLM call for token creation flow ─────────────────
+// Bypasses the Python CLI and calls Ollama directly with step-specific prompts.
+// This gives us full control over the system prompt per step, so the LLM writes
+// natural replies while the regex extraction handles field parsing separately.
+
+const LLM_BASE_URL = process.env.TONKL_AI_MODEL_BASE_URL || "http://127.0.0.1:11434/v1";
+const LLM_MODEL = process.env.TONKL_AI_MODEL_NAME || "llama3.2";
+const LLM_API_KEY = process.env.TONKL_AI_MODEL_API_KEY || "ollama";
+const LLM_TIMEOUT_MS = 30_000;
+
+type LLMMessage = { role: "system" | "user" | "assistant"; content: string };
+
+async function callTokenLLM(messages: LLMMessage[]): Promise<string | null> {
+  try {
+    const safeMessages = messages.map((message) => ({
+      ...message,
+      content: maskSecretText(message.content).text,
+    }));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+    const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${LLM_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        messages: safeMessages,
+        temperature: 0.7,
+        max_tokens: 300,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const json = await res.json() as { choices?: { message?: { content?: string } }[] };
+    return json.choices?.[0]?.message?.content?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+const TOKEN_SYSTEM_BASE = `You are Tonkl AI, the assistant for the Tonkl privacy blockchain network. You're helping a user create a custom token through conversation. Be warm, concise, and knowledgeable. Never use markdown bold (**text**). Keep responses under 3 sentences unless explaining options. Sound like a smart friend who knows crypto, not a corporate chatbot.`;
+
+function buildTokenStepPrompt(
+  nextField: string,
+  merged: MergedForm,
+  userMessage: string,
+): LLMMessage[] {
+  const name = String(merged.name || "");
+  const symbol = String(merged.symbol || "").toUpperCase();
+  const supply = String(merged.initialSupply || "");
+  const desc = String(merged.description || "");
+
+  const formSummary = [
+    name && `Name: ${name}`,
+    symbol && `Symbol: $${symbol}`,
+    supply && supply !== "0" && `Supply: ${parseInt(supply).toLocaleString()}`,
+    desc && desc.length >= 10 && `Description: ${desc}`,
+  ].filter(Boolean).join("\n");
+
+  const contextBlock = formSummary
+    ? `\nToken so far:\n${formSummary}\n`
+    : "\nNo fields collected yet.\n";
+
+  let stepInstruction = "";
+
+  switch (nextField) {
+    case "name":
+      stepInstruction = `The user wants to create a token but hasn't given a name yet. Acknowledge what they said naturally, then ask what they want to call the token. Keep it casual and short.`;
+      break;
+    case "symbol": {
+      const suggestions = generateTickerSuggestions(name);
+      const sugList = suggestions.map(s => `$${s}`).join(", ");
+      stepInstruction = `The user just set the token name to "${name}". Acknowledge their choice with enthusiasm, then ask what ticker symbol they want. Suggest these options: ${sugList} — but let them know they can pick their own. Keep it to 2-3 sentences.`;
+      break;
+    }
+    case "supply":
+      stepInstruction = `The user just set the symbol to $${symbol}. Acknowledge it, then ask how many tokens should exist at launch. Briefly explain the tradeoffs: small supply (10k or less) = scarce and collectible, medium (around 1M) = balanced for most projects, large (100M+) = accessible and great for tipping or meme tokens. Give a couple of real examples. Ask them for a number. Keep it conversational, not a bulleted list.`;
+      break;
+    case "description":
+      stepInstruction = `The user set the supply to ${parseInt(supply).toLocaleString()} $${symbol}. Acknowledge it naturally, then ask what this token is for. Tell them to just give a rough idea — you'll help write a proper description. One or two sentences max.`;
+      break;
+    case "features":
+      // Features step is handled by template (too structured for LLM)
+      stepInstruction = "";
+      break;
+    case "done":
+      stepInstruction = "";
+      break;
+  }
+
+  if (!stepInstruction) return [];
+
+  return [
+    { role: "system", content: `${TOKEN_SYSTEM_BASE}${contextBlock}\n${stepInstruction}` },
+    { role: "user", content: userMessage },
+  ];
+}
+
+async function generateLLMDescription(
+  userHint: string,
+  name: string,
+  symbol: string,
+  category: string,
+): Promise<string | null> {
+  const sym = symbol.toUpperCase();
+  const messages: LLMMessage[] = [
+    {
+      role: "system",
+      content: `You are writing a short token description for a listing page on the Tonkl privacy blockchain. Write exactly ONE paragraph (2-3 sentences). The token is called "${name}" ($${sym}), categorized as "${category}". The user described it as: "${userHint}". Write a professional but approachable description that captures what makes this token unique. Mention Tonkl and privacy-preserving transfers naturally. Do NOT use markdown, bullet points, or bold text. Do NOT start with "Introducing" or "Welcome to". Just write the description directly.`,
+    },
+    {
+      role: "user",
+      content: `Write a token description for ${name} ($${sym}) based on this: ${userHint}`,
+    },
+  ];
+  return callTokenLLM(messages);
+}
+
 // ─── Token creation: LLM steering helpers ───────────────────
 
 type MergedForm = Record<string, unknown>;
@@ -654,60 +790,6 @@ function getNextMissingField(merged: MergedForm): string {
   // _askedAdvanced is set by buildTokenCreationReply when features are presented
   if (!merged._askedAdvanced) return "features";
   return "done";
-}
-
-function getFieldHint(field: string, merged: MergedForm): string {
-  switch (field) {
-    case "name":
-      return "So — what do you want to call this token?";
-    case "symbol": {
-      const name = String(merged.name);
-      const suggestions = generateTickerSuggestions(name);
-      const sugList = suggestions.map(s => `$${s}`).join(", ");
-      return `What ticker symbol works for "${name}"? Some ideas: ${sugList} — or pick your own.`;
-    }
-    case "supply": {
-      const sym = String(merged.symbol).toUpperCase();
-      return `How many $${sym} tokens should exist at launch? Just give me a number — like "1 million" or "10000". I'll help you think through it.`;
-    }
-    case "description":
-      return "What's this token for? Just a sentence or two — I'll help you polish it into a proper description.";
-    case "features":
-      // This is built dynamically in buildTokenCreationReply
-      return "";
-    default:
-      return "";
-  }
-}
-
-/**
- * Extract just the first 1-2 sentences from the LLM's response as an acknowledgment.
- * This lets us use the LLM's natural language for the "I understand" part while
- * controlling the actual question/flow via templates.
- *
- * STRICT filtering: reject anything that contains a question, references resetting,
- * or tries to ask about fields the template already handles.
- */
-function extractAcknowledgment(text: string): string {
-  const sentences = text.split(/(?<=[.!?])\s+/);
-  let ack = "";
-  for (let i = 0; i < Math.min(sentences.length, 2); i++) {
-    const s = sentences[i].trim();
-    // Skip any sentence that contains a question mark
-    if (s.includes("?")) continue;
-    // Skip sentences that sound like they're restarting or asking about fields
-    if (/\b(start again|start over|let me know|how many|what ticker|what symbol|what.*call|tell me|describe|purpose)\b/i.test(s)) continue;
-    // Skip sentences that reference specific field names
-    if (/\b(supply|ticker|symbol|name|description|category|decimals)\b/i.test(s)) continue;
-    const candidate = ack ? `${ack} ${s}` : s;
-    if (candidate.length > 160) break;
-    ack = candidate;
-  }
-  // Final check: reject if it starts with a question word
-  if (ack && /^(what|how|would|should|do you|can you|which|where|when|why)/i.test(ack.trim())) {
-    return "";
-  }
-  return ack.trim();
 }
 
 // ─── Token creation conversational replies ────────────────────
@@ -907,7 +989,7 @@ function generateDescriptionFromContext(name: string, symbol: string, category: 
   // "a reflection of my cat tummy" → "cat tummy"
   // "helping kids learn to read" → "helping kids learn to read"
   // "just my personal thing" → personal
-  const subjectMatch = hint.match(/(?:reflection\s+of|tribute\s+to|inspired\s+by|based\s+on|about|for)\s+(?:my\s+)?(.+)/i);
+  const subjectMatch = hint.match(/(?:reflection\s+of|tribute\s+to|inspired\s+by|based\s+on|about|for|tied\s+to|linked\s+to|part\s+of|connected\s+to)\s+(?:my\s+|our\s+|the\s+|a\s+)?(.+)/i);
   const subject = subjectMatch ? subjectMatch[1].trim() : "";
 
   // ── Detect specific themes in the hint ──────────────────
@@ -918,6 +1000,10 @@ function generateDescriptionFromContext(name: string, symbol: string, category: 
   const hasReward = /\b(reward|earn|incentiv|loyal|exclusive|access|perk|benefit)\b/i.test(hintLower);
   const hasCharity = /\b(charit|donat|cause|help|impact|fund|educat|school|climate|environment|health)\b/i.test(hintLower);
   const hasGame = /\b(game|play|quest|level|score|earn.*play)\b/i.test(hintLower);
+  const hasMascot = /\b(mascot|emblem|symbol|represent|identity|brand)\b/i.test(hintLower);
+  const hasPrivacy = /\b(privacy|private|anonymous|encrypted|confidential|secret|hidden)\b/i.test(hintLower);
+  const hasService = hint.match(/\b(?:service|app|platform|product|protocol|network|messaging|chat)\s+(?:called|named)?\s*([A-Za-z][A-Za-z0-9 ]*)/i);
+  const serviceName = hasService ? hasService[1]?.trim() : "";
 
   // ── MEME descriptions — match the energy ────────────────
   if (cat === "meme") {
@@ -947,9 +1033,26 @@ function generateDescriptionFromContext(name: string, symbol: string, category: 
   }
 
   // ── COMMUNITY descriptions ──────────────────────────────
-  if (cat === "community" || hasCommunity || hasReward) {
+  if (cat === "community" || hasCommunity || hasReward || hasMascot) {
+    if (hasMascot && serviceName) {
+      const sameAsName = serviceName.toLowerCase() === name.toLowerCase();
+      const privacyClause = hasPrivacy ? "Built for a privacy-first ecosystem, every" : "Every";
+      if (sameAsName) {
+        return `${name} ($${sym}) is the official mascot token for the ${name} ecosystem on the Tonkl network. ${privacyClause} transfer is encrypted and programmable tokenomics are baked in from day one.`;
+      }
+      return `${name} ($${sym}) is the mascot token for ${serviceName} on the Tonkl network. ${privacyClause} transfer is encrypted and programmable tokenomics are baked in from day one.`;
+    }
+    if (hasMascot && subject) {
+      return `${name} ($${sym}) is a mascot token representing ${subject} on the Tonkl network. It brings the community together around a shared identity — with privacy-first transfers and on-chain tokenomics.`;
+    }
+    if (subject && serviceName) {
+      return `${name} ($${sym}) is the community token for ${serviceName} on the Tonkl network. Holders get a stake in the ecosystem — with privacy-preserving transfers and programmable tokenomics built in.`;
+    }
     if (hasPersonal) {
       return `${name} ($${sym}) is a personal creator token on the Tonkl network. Supporters hold $${sym} to back the creator directly, unlock exclusive perks, and be part of the inner circle — with on-chain privacy and programmable tokenomics.`;
+    }
+    if (subject) {
+      return `${name} ($${sym}) is a community token built around ${subject}. Holders unlock exclusive benefits and help shape the project's future — all on Tonkl's privacy-first network.`;
     }
     return `${name} ($${sym}) is a community token that rewards early supporters and active participants. Holders unlock exclusive benefits and help shape the project's future — all on Tonkl's privacy-first network.`;
   }
@@ -980,6 +1083,9 @@ function generateDescriptionFromContext(name: string, symbol: string, category: 
   }
 
   // ── UTILITY (default) ───────────────────────────────────
+  if (serviceName) {
+    return `${name} ($${sym}) is a utility token powering ${serviceName} on the Tonkl network. It drives access, participation, and value exchange — with privacy-preserving transfers built into every interaction.`;
+  }
   if (subject) {
     return `${name} ($${sym}) is a utility token built around ${subject}. It powers access, participation, and value exchange within its ecosystem — with privacy-preserving transfers on the Tonkl network.`;
   }
@@ -1040,6 +1146,8 @@ function inferCategoryFromDescription(description: string, name: string): string
     /\b(?:my\s+(?:followers|fans|audience|supporters|community|people))\b/,
     /\b(?:back\s+me|support\s+me|join\s+(?:me|us)|come\s+together)\b/,
     /\b(?:personal\s+(?:token|brand|project)|my\s+own\s+token)\b/,
+    /\b(?:mascot|represent(?:s|ing)?|emblem|symbol\s+(?:of|for)|identity|branding)\b/,
+    /\b(?:tied\s+to|linked\s+to|associated\s+with|part\s+of)\s+(?:our|my|the|a)\b/,
   ];
   if (communitySignals.filter(p => p.test(text)).length >= 2) return "community";
   // Single strong community signal
