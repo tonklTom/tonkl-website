@@ -22,7 +22,7 @@
 
 import { spawn } from "node:child_process";
 import { checkRateLimit, getClientKey } from "@/lib/rate-limit";
-import { requireSession } from "@/lib/session";
+import { requireSession, getSessionPassphrase } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -134,6 +134,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // ── Resolve wallet passphrase (encrypted wallets) ────────────
+  // The DB passphrase lives in the server-side session, not the request body.
+  // Fall back to body.passphrase for compatibility, but session is the source of truth.
+  const passphrase = getSessionPassphrase(request) || body.passphrase;
+
   // ── Resolve recipient pk_x and pk_y ──────────────────────────
   const ensure0x = (s: string) => s && !s.startsWith("0x") ? `0x${s}` : s;
   let toPkX = ensure0x(recipient);
@@ -142,7 +147,7 @@ export async function POST(request: Request) {
 
   // Look up pk_y — check if recipient matches one of our own keys
   try {
-    const keysOutput = await runListKeys(body.passphrase);
+    const keysOutput = await runListKeys(passphrase);
     const keysResult = JSON.parse(keysOutput);
     if (keysResult.keys) {
       const norm = (s: string) => (s || "").replace(/^0x/i, "").toLowerCase();
@@ -166,14 +171,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    toScanPk = await resolveScanPkForAddress(toPkX, body.passphrase);
+    toScanPk = await resolveScanPkForAddress(toPkX, passphrase);
   } catch {
     // Not fatal; the transfer can still be created, but auto-scan may not import the recipient note.
   }
 
   // ── Execute send ────────────────────────────────────────────
   try {
-    const output = await runSend(amount, toPkX, toPkY, assetId, body.passphrase, toScanPk);
+    const output = await runSend(amount, toPkX, toPkY, assetId, passphrase, toScanPk);
 
     // Try to extract tx hash from output
     const txHash = extractTxHash(output);

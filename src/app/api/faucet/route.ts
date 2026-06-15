@@ -129,9 +129,11 @@ export async function POST(request: Request) {
   // ── Resolve the requested address to a local wallet key ──────
   // The route must not silently use the first key; the selected key
   // has to match the requested/session address.
+  // Encrypted user wallets need the DB passphrase from the session to read keys.
+  const userPassphrase = session.passphrase;
   let recipientKey: RecipientKey | null = null;
   try {
-    recipientKey = await resolveRecipientKey(normalizedAddress);
+    recipientKey = await resolveRecipientKey(normalizedAddress, userPassphrase);
   } catch {
     if (process.env.NODE_ENV !== "production") {
       console.error("[faucet] list-keys failed (details redacted)");
@@ -230,9 +232,9 @@ function ensure0x(value: string): string {
   return value.startsWith("0x") ? value : `0x${value}`;
 }
 
-async function resolveRecipientKey(address: string): Promise<RecipientKey | null> {
+async function resolveRecipientKey(address: string, passphrase?: string): Promise<RecipientKey | null> {
   // Query the USER's wallet to find pk_y for the given pk_x (address)
-  const keysOutput = await runWalletCommand(["--json", "list-keys"], WALLET_DB);
+  const keysOutput = await runWalletCommand(["--json", "list-keys"], WALLET_DB, passphrase);
   const keysResult = JSON.parse(keysOutput) as { keys?: WalletKey[] };
 
   const match = (keysResult.keys || []).find((key) => normalizeHex(key.pk_x || "") === address);
@@ -242,13 +244,13 @@ async function resolveRecipientKey(address: string): Promise<RecipientKey | null
     keyIndex: match.index,
     pkX: ensure0x(match.pk_x),
     pkY: ensure0x(match.pk_y),
-    scanPk: await resolveRecipientScanPk(address),
+    scanPk: await resolveRecipientScanPk(address, passphrase),
   };
 }
 
-async function resolveRecipientScanPk(address: string): Promise<string | undefined> {
+async function resolveRecipientScanPk(address: string, passphrase?: string): Promise<string | undefined> {
   try {
-    const output = await runWalletCommand(["--json", "scan-keys"], WALLET_DB);
+    const output = await runWalletCommand(["--json", "scan-keys"], WALLET_DB, passphrase);
     const result = JSON.parse(output) as {
       scan_keys?: Array<{ pk_x?: string; scan_pk_hex?: string }>;
     };
@@ -259,11 +261,13 @@ async function resolveRecipientScanPk(address: string): Promise<string | undefin
   }
 }
 
-function runWalletCommand(extraArgs: string[], dbPath?: string): Promise<string> {
+function runWalletCommand(extraArgs: string[], dbPath?: string, passphrase?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const db = dbPath || WALLET_DB;
     const args = [WALLET_SCRIPT, "--node-url", NODE_URL];
     if (db) args.push("--db", db);
+    // SECURITY: Pass passphrase via stdin (never as a CLI arg) for encrypted wallets.
+    if (passphrase) args.push("--passphrase-stdin");
     args.push(...extraArgs);
 
     const safeEnv: NodeJS.ProcessEnv = {
@@ -275,9 +279,19 @@ function runWalletCommand(extraArgs: string[], dbPath?: string): Promise<string>
     if (process.env.PYTHONPATH) safeEnv.PYTHONPATH = process.env.PYTHONPATH;
 
     const child = spawn(PYTHON, args, {
-      stdio: ["ignore", "pipe", "pipe"] as const,
+      stdio: [passphrase ? "pipe" : "ignore", "pipe", "pipe"] as const,
       env: safeEnv,
     });
+
+    if (passphrase && child.stdin) {
+      child.stdin.write(passphrase + "\n");
+      child.stdin.end();
+    }
+
+    if (!child.stdout) {
+      reject(new Error("Wallet command pipe setup failed"));
+      return;
+    }
 
     let stdout = "";
     child.stdout.setEncoding("utf8");
