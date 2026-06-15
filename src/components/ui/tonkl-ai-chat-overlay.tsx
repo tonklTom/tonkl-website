@@ -654,34 +654,34 @@ function TokenPreviewCard({
   };
 
   return (
-    <div className="max-w-[90%] rounded-2xl rounded-bl-none overflow-hidden border border-white/10 bg-[#0a0a0a] shadow-2xl">
+    <div className="max-w-[90%] rounded-2xl rounded-bl-none overflow-hidden border border-white/20 bg-gradient-to-br from-[#121212]/95 to-[#020202]/98 backdrop-blur-2xl text-white shadow-2xl shadow-black/80 transition-all duration-300">
       {/* Header bar */}
-      <div className="px-4 py-2.5 bg-white/[0.03] border-b border-white/5 flex items-center justify-between">
+      <div className="px-4 py-3 bg-white/[0.02] border-b border-white/10 flex items-center justify-between font-serif tracking-widest">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-[10px] text-white/40 font-mono uppercase tracking-widest">Tonkl Token Preview</span>
+          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-[10px] text-white/70 font-serif uppercase tracking-widest font-semibold">Tonkl Token Preview</span>
         </div>
-        <span className="text-[10px] text-white/25 font-mono">TESTNET</span>
+        <span className="text-[10px] text-white/40 font-serif tracking-widest font-medium">TESTNET PROTOCOL</span>
       </div>
 
       {/* Token hero section */}
-      <div className="p-5">
+      <div className="p-5 font-serif">
         <div className="flex items-start gap-4 mb-5">
           {/* Token logo — clickable to upload */}
           <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" className="hidden" onChange={handleLogoUpload} />
           <div className="shrink-0 flex flex-col items-center gap-1">
             <button
               onClick={() => logoInputRef.current?.click()}
-              className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-bold shadow-lg relative group overflow-hidden transition-all hover:ring-2 hover:ring-white/20 cursor-pointer"
-              style={logoPreview ? {} : { background: `linear-gradient(135deg, ${color}, ${color}88)`, color: "white", textShadow: "0 1px 2px rgba(0,0,0,0.3)" }}
+              className="w-16 h-16 rounded-2xl flex items-center justify-center text-xl font-bold shadow-lg border border-white/20 relative group overflow-hidden transition-all hover:ring-2 hover:ring-white/20 cursor-pointer"
+              style={logoPreview ? {} : { background: `linear-gradient(135deg, ${color}44, ${color}22)`, color: "white", textShadow: "0 1px 2px rgba(0,0,0,0.3)" }}
               title="Click to upload a logo"
             >
               {logoPreview ? (
                 <img src={logoPreview} alt="Token logo" className="w-full h-full object-cover rounded-2xl" />
               ) : (
                 <>
-                  {initials}
-                  <div className="absolute inset-0 bg-black/30 flex items-end justify-center pb-1 rounded-2xl">
+                  <span className="font-serif tracking-wider font-bold text-white/90">{initials}</span>
+                  <div className="absolute inset-0 bg-black/40 flex items-end justify-center pb-1 rounded-2xl">
                     <ImagePlus className="w-3.5 h-3.5 text-white/70" />
                   </div>
                 </>
@@ -693,39 +693,39 @@ function TokenPreviewCard({
               )}
             </button>
             {!logoPreview && (
-              <button onClick={() => logoInputRef.current?.click()} className="text-[9px] text-white/30 hover:text-white/50 transition-colors cursor-pointer">
+              <button onClick={() => logoInputRef.current?.click()} className="text-[9px] text-white/40 hover:text-white/60 font-serif transition-colors cursor-pointer uppercase tracking-wider font-semibold">
                 add logo
               </button>
             )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
-              <h3 className={`${isFullscreen ? "text-xl" : "text-lg"} font-semibold text-white truncate`}>{name}</h3>
-              {score === 100 && <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0" />}
+              <h3 className={`${isFullscreen ? "text-xl" : "text-lg"} font-serif font-bold text-white truncate`}>{name}</h3>
+              {score === 100 && <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />}
             </div>
-            <p className="text-white/50 font-mono text-sm">${symbol}</p>
+            <p className="text-white/50 font-serif text-sm tracking-wider">${symbol}</p>
           </div>
           {/* Category badge */}
           {form.category && (
-            <span className="px-2.5 py-1 rounded-full text-[10px] font-medium uppercase tracking-wider border shrink-0"
-              style={{ borderColor: `${color}40`, color: `${color}`, background: `${color}10` }}>
+            <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-widest border shrink-0 bg-white/[0.03] shadow-sm"
+              style={{ borderColor: `${color}40`, color: `${color}` }}>
               {form.category as string}
             </span>
           )}
         </div>
 
         {/* Mock price display */}
-        <div className="mb-5 p-4 rounded-xl bg-white/[0.02] border border-white/5">
-          <div className="flex items-end gap-3 mb-2">
-            <span className={`${isFullscreen ? "text-3xl" : "text-2xl"} font-bold text-white font-mono`}>
+        <div className="mb-5 p-4 rounded-xl bg-white/[0.02] border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+          <div className="flex items-end justify-between mb-2">
+            <span className={`${isFullscreen ? "text-3xl" : "text-2xl"} font-bold text-white font-serif`}>
               ${supply > 0 ? (1000000 / supply).toFixed(supply > 1000000 ? 6 : 4) : "0.00"}
             </span>
-            <span className="text-green-400 text-sm font-mono mb-1">New listing</span>
+            <span className="text-emerald-400 text-xs font-serif uppercase tracking-widest font-semibold mb-1">New listing</span>
           </div>
           {/* Mini chart placeholder */}
-          <div className="h-12 w-full rounded-lg bg-white/[0.02] border border-white/5 flex items-end px-2 pb-1 gap-[2px]">
+          <div className="h-12 w-full rounded-lg bg-black/40 border border-white/5 flex items-end px-2 pb-1 gap-[2px] shadow-inner">
             {chartHeights.map((h, i) => (
-              <div key={i} className="flex-1 rounded-t-sm" style={{ height: `${h}%`, background: `${color}60` }} />
+              <div key={i} className="flex-1 rounded-t-sm" style={{ height: `${h}%`, background: `linear-gradient(to top, ${color}60, ${color}aa)` }} />
             ))}
           </div>
         </div>
@@ -735,26 +735,26 @@ function TokenPreviewCard({
           <StatBlock label="Total Supply" value={supply > 0 ? supply.toLocaleString() : "0"} sub={`$${symbol}`} />
           <StatBlock label="Market Cap" value={supply > 0 ? `$${(1000000).toLocaleString()}` : "$0"} sub="Estimated" />
           <StatBlock label="Decimals" value={String(form.decimals ?? 0)} sub="Precision" />
-          <StatBlock label="Metadata" value={`${score}%`} sub={score === 100 ? "Verified" : "Standard"} color={score === 100 ? "#22d3ee" : "#eab308"} />
+          <StatBlock label="Metadata" value={`${score}%`} sub={score === 100 ? "Verified" : "Standard"} color={score === 100 ? "#34d399" : "#fbbf24"} />
         </div>
 
         {/* On-chain features */}
         {(hasBurn || hasEcho || hasSupplyCap) && (
-          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5">
-            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2 font-medium">On-Chain Features</p>
+          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-2 font-serif font-semibold">On-Chain Features</p>
             <div className="flex flex-wrap gap-2">
               {hasBurn && (
-                <span className="px-2.5 py-1 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-mono">
+                <span className="px-2.5 py-1 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-mono font-medium shadow-sm">
                   Burn {(parseInt(form.burnRate as string) / 100).toFixed(2)}%
                 </span>
               )}
               {hasEcho && (
-                <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-xs font-mono">
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono font-medium shadow-sm">
                   Echo {(parseInt(form.echoRate as string) / 100).toFixed(2)}%
                 </span>
               )}
               {hasSupplyCap && (
-                <span className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-mono">
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono font-medium shadow-sm">
                   Cap {parseInt(form.supplyCap as string).toLocaleString()}
                 </span>
               )}
@@ -764,23 +764,23 @@ function TokenPreviewCard({
 
         {/* Description */}
         {form.description && (
-          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5">
-            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-1.5 font-medium">About</p>
-            <p className="text-white/60 text-sm leading-relaxed">{form.description as string}</p>
+          <div className="mb-4 p-3 rounded-xl bg-white/[0.02] border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+            <p className="text-[10px] text-white/40 uppercase tracking-widest mb-1.5 font-serif font-semibold">About</p>
+            <p className="text-white/80 text-sm leading-relaxed font-serif">{form.description as string}</p>
           </div>
         )}
 
         {/* Missing fields hint */}
         {missing.length > 0 && (
-          <div className="mb-4 p-2.5 rounded-lg bg-yellow-500/5 border border-yellow-500/10">
-            <p className="text-yellow-400/60 text-xs">Optional fields: {missing.join(", ")}</p>
+          <div className="mb-4 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/10 shadow-[0_2px_8px_rgba(245,158,11,0.02)]">
+            <p className="text-amber-300 text-xs font-serif">Optional fields remaining: {missing.join(", ")}</p>
           </div>
         )}
 
         {/* Edit toggle */}
-        <button onClick={() => setIsEditing(!isEditing)} className="flex items-center gap-1.5 text-xs text-white/30 hover:text-white/50 transition-colors mb-4">
+        <button onClick={() => setIsEditing(!isEditing)} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 font-serif transition-colors mb-4 cursor-pointer select-none">
           {isEditing ? <ChevronUp className="w-3 h-3" /> : <Pencil className="w-3 h-3" />}
-          {isEditing ? "Close editor" : "Edit details before minting"}
+          <span className="font-semibold uppercase tracking-wider text-[10px]">{isEditing ? "Close editor" : "Edit details before minting"}</span>
         </button>
 
         <AnimatePresence>
@@ -792,24 +792,20 @@ function TokenPreviewCard({
         </AnimatePresence>
 
         {/* ZK proof note */}
-        <p className="text-white/20 text-[11px] mb-4 text-center">
+        <p className="text-white/40 text-[11px] mb-4 text-center font-serif italic">
           Minting generates a ZK proof on-chain. This takes 30-60 seconds.
         </p>
 
-        {/* Create button */}
+        {/* Create button — Premium White Button with Black Serif writing for high contrast against the dark background */}
         <button
           onClick={onConfirm}
           disabled={isCreating || !form.symbol || !form.name}
-          className="w-full py-3 font-semibold rounded-xl flex items-center justify-center gap-2 text-sm transition-all"
-          style={isCreating || !form.symbol || !form.name
-            ? { background: "#222", color: "#555" }
-            : { background: `linear-gradient(135deg, ${color}, ${color}cc)`, color: "white", boxShadow: `0 4px 20px ${color}30` }
-          }
+          className="w-full py-4 bg-white text-black hover:bg-white/90 font-serif font-semibold rounded-xl flex items-center justify-center gap-2 text-xs uppercase tracking-widest transition-all duration-300 border border-black/10 shadow-lg disabled:bg-white/30 disabled:text-black/40 disabled:border-black/5 disabled:cursor-not-allowed disabled:shadow-none hover:shadow-[0_0_25px_rgba(255,255,255,0.25)] hover:scale-[1.01]"
         >
           {isCreating ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Generating ZK Proof...</>
+            <><Loader2 className="w-4 h-4 animate-spin text-black/60" /> Generating ZK Proof...</>
           ) : (
-            <><Sparkles className="w-4 h-4" /> Create ${symbol} on Tonkl</>
+            <><Sparkles className="w-4 h-4 text-black/75" /> Create ${symbol} on Tonkl</>
           )}
         </button>
       </div>
@@ -819,10 +815,10 @@ function TokenPreviewCard({
 
 function StatBlock({ label, value, sub, color }: { label: string; value: string; sub: string; color?: string }) {
   return (
-    <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5">
-      <p className="text-[10px] text-white/30 uppercase tracking-widest mb-1">{label}</p>
-      <p className="text-white font-mono font-semibold text-sm" style={color ? { color } : {}}>{value}</p>
-      <p className="text-white/25 text-[10px] font-mono">{sub}</p>
+    <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 shadow-[0_4px_12px_rgba(0,0,0,0.2)]">
+      <p className="text-[10px] text-white/40 uppercase tracking-widest font-serif font-semibold mb-1">{label}</p>
+      <p className="text-white font-serif font-semibold text-sm" style={color ? { color } : {}}>{value}</p>
+      <p className="text-white/30 text-[9px] font-mono">{sub}</p>
     </div>
   );
 }
@@ -831,7 +827,7 @@ function StatBlock({ label, value, sub, color }: { label: string; value: string;
 
 function TokenInlineEditor({ form, onEdit }: { form: Partial<TokenFormData>; onEdit: (field: string, value: string | number) => void }) {
   return (
-    <div className="space-y-3 mb-3 p-3 rounded-xl bg-white/[0.02] border border-white/5">
+    <div className="space-y-3 mb-3 p-4 rounded-xl bg-black/40 border border-white/10 shadow-[inset_0_2px_8px_rgba(0,0,0,0.4)]">
       <div className="grid grid-cols-2 gap-2">
         <EditField label="Symbol" value={form.symbol as string || ""} onChange={(v) => onEdit("symbol", v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10))} />
         <EditField label="Name" value={form.name as string || ""} onChange={(v) => onEdit("name", v.slice(0, 64))} />
@@ -840,9 +836,9 @@ function TokenInlineEditor({ form, onEdit }: { form: Partial<TokenFormData>; onE
       <div className="grid grid-cols-2 gap-2">
         <EditField label="Supply" value={form.initialSupply as string || "0"} onChange={(v) => onEdit("initialSupply", v.replace(/[^0-9]/g, ""))} />
         <div>
-          <label className="block text-white/30 text-[10px] uppercase tracking-wider mb-1">Category</label>
+          <label className="block text-white/40 text-[10px] font-serif font-semibold uppercase tracking-wider mb-1">Category</label>
           <select value={form.category as string || "Utility"} onChange={(e) => onEdit("category", e.target.value)}
-            className="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-cyan-500/50">
+            className="w-full bg-black/50 border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs font-serif focus:outline-none focus:border-white/30 focus:bg-black transition-all shadow-sm">
             {CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
           </select>
         </div>
@@ -861,13 +857,13 @@ function TokenInlineEditor({ form, onEdit }: { form: Partial<TokenFormData>; onE
 function EditField({ label, value, onChange, multiline = false }: { label: string; value: string; onChange: (v: string) => void; multiline?: boolean }) {
   return (
     <div>
-      <label className="block text-white/30 text-[10px] uppercase tracking-wider mb-1">{label}</label>
+      <label className="block text-white/40 text-[10px] font-serif font-semibold uppercase tracking-wider mb-1">{label}</label>
       {multiline ? (
         <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={2}
-          className="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-cyan-500/50 resize-none" />
+          className="w-full bg-black/50 border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs font-serif focus:outline-none focus:border-white/30 focus:bg-black resize-none transition-all shadow-sm" />
       ) : (
         <input type="text" value={value} onChange={(e) => onChange(e.target.value)}
-          className="w-full bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-cyan-500/50" />
+          className="w-full bg-black/50 border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs font-serif focus:outline-none focus:border-white/30 focus:bg-black transition-all shadow-sm" />
       )}
     </div>
   );
@@ -880,27 +876,27 @@ function TokenSuccessCard({ msg, isFullscreen }: { msg: ChatMessage; isFullscree
   if (!token) return null;
 
   return (
-    <div className="max-w-[85%] rounded-2xl rounded-bl-none overflow-hidden border border-green-500/20 bg-gradient-to-br from-green-500/5 to-cyan-500/5 shadow-lg">
-      <div className="p-4">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-12 h-12 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center">
-            <CheckCircle className="w-6 h-6 text-green-400" />
+    <div className="max-w-[85%] rounded-2xl rounded-bl-none overflow-hidden border border-emerald-500/30 bg-gradient-to-br from-emerald-950/40 to-black/85 backdrop-blur-2xl text-white shadow-2xl transition-all duration-300">
+      <div className="p-4 font-serif">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shadow-inner">
+            <CheckCircle className="w-6 h-6 text-emerald-400" />
           </div>
           <div>
-            <h3 className={`${isFullscreen ? "text-xl" : "text-lg"} font-medium text-white`}>Token Created</h3>
-            <p className="text-green-400 text-sm">{token.symbol} is live on the Tonkl network</p>
+            <h3 className={`${isFullscreen ? "text-xl" : "text-lg"} font-bold text-white font-serif`}>Token Created</h3>
+            <p className="text-emerald-400 text-sm font-medium tracking-wide">{token.symbol} is live on Tonkl</p>
           </div>
         </div>
 
         {msg.warning && (
-          <div className="mb-3 p-2.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-            <p className="text-yellow-400 text-xs flex items-center gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {msg.warning}
+          <div className="mb-4 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/10 shadow-sm">
+            <p className="text-amber-200 text-xs flex items-center gap-2 font-serif">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-400" /> {msg.warning}
             </p>
           </div>
         )}
 
-        <div className="space-y-2 mb-3">
+        <div className="space-y-2 mb-4 bg-white/[0.02] p-3 rounded-xl border border-white/10 shadow-sm">
           <TokenDetailRow label="Symbol" value={token.symbol} mono />
           <TokenDetailRow label="Asset ID" value={token.assetId} mono />
           <TokenDetailRow label="Tier"><TierBadge tier={token.tier} /></TokenDetailRow>
@@ -908,9 +904,9 @@ function TokenSuccessCard({ msg, isFullscreen }: { msg: ChatMessage; isFullscree
         </div>
 
         {token.riskDetails.length > 0 && (
-          <div className="p-2 rounded-lg bg-white/[0.02] border border-white/5">
-            <p className="text-white/30 text-[10px] uppercase tracking-wider mb-1">Notes</p>
-            {token.riskDetails.map((d, i) => <p key={i} className="text-white/20 text-xs">{d}</p>)}
+          <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 shadow-[0_2px_8px_rgba(0,0,0,0.2)]">
+            <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1 font-semibold">Notes</p>
+            {token.riskDetails.map((d, i) => <p key={i} className="text-white/60 text-xs leading-relaxed">{d}</p>)}
           </div>
         )}
       </div>
@@ -920,9 +916,9 @@ function TokenSuccessCard({ msg, isFullscreen }: { msg: ChatMessage; isFullscree
 
 function TokenDetailRow({ label, value, mono, last, children }: { label: string; value?: string; mono?: boolean; last?: boolean; children?: React.ReactNode }) {
   return (
-    <div className={`flex justify-between py-1.5 ${!last ? "border-b border-white/5" : ""}`}>
-      <span className="text-white/40 text-xs">{label}</span>
-      {children || <span className={`text-white text-xs ${mono ? "font-mono" : ""}`}>{value}</span>}
+    <div className={`flex justify-between items-center py-2 ${!last ? "border-b border-white/5" : ""}`}>
+      <span className="text-white/50 text-xs font-serif font-medium">{label}</span>
+      {children || <span className={`text-white/90 text-xs font-serif font-medium ${mono ? "font-mono tracking-tight" : ""}`}>{value}</span>}
     </div>
   );
 }
@@ -931,13 +927,13 @@ function TokenDetailRow({ label, value, mono, last, children }: { label: string;
 
 function ExtractedFieldsBadge({ fields }: { fields: Partial<TokenFormData> }) {
   return (
-    <div className="mt-3 p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20">
-      <p className="text-[10px] text-purple-400 font-medium uppercase tracking-wider mb-1.5">Extracted fields</p>
+    <div className="mt-3 p-3 rounded-xl bg-purple-500/10 border border-purple-500/20 shadow-sm">
+      <p className="text-[10px] text-purple-400 font-serif font-semibold uppercase tracking-wider mb-1.5">Extracted fields</p>
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(fields).map(([key, val]) => (
-          <span key={key} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/10 border border-purple-500/15 text-xs text-white/60">
-            <span className="text-purple-400/70 capitalize">{key.replace(/([A-Z])/g, " $1").trim()}:</span>
-            <span className="text-white/80 font-mono">{String(val)}</span>
+          <span key={key} className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/[0.02] border border-white/10 text-xs text-white/80 font-serif shadow-sm">
+            <span className="text-white/50 capitalize font-medium">{key.replace(/([A-Z])/g, " $1").trim()}:</span>
+            <span className="text-white font-mono font-medium">{String(val)}</span>
           </span>
         ))}
       </div>
@@ -951,40 +947,40 @@ function GenericPreviewCard({ preview, executionEnabled, isCancelled, onCancel }
   preview: TonklAIPreview; executionEnabled: boolean; isCancelled: boolean; onCancel: () => void;
 }) {
   return (
-    <div className="mt-4 overflow-hidden rounded-lg border border-cyan-300/20 bg-black/35">
-      <div className="flex items-start gap-3 border-b border-cyan-300/10 p-3">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-cyan-300/25 bg-cyan-300/10">
-          <ShieldCheck className="h-4 w-4 text-cyan-300" />
+    <div className="mt-4 overflow-hidden rounded-xl border border-white/10 bg-gradient-to-br from-[#121212]/95 to-[#020202]/98 backdrop-blur-2xl text-white shadow-lg font-serif">
+      <div className="flex items-start gap-3 border-b border-white/10 p-3 bg-white/[0.02]">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.02] shadow-sm text-emerald-400">
+          <ShieldCheck className="h-4 w-4 text-emerald-400" />
         </div>
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-white">{preview.title}</h3>
-          <p className="mt-1 text-xs leading-relaxed text-cyan-50/75">{preview.summary}</p>
+          <h3 className="text-sm font-serif font-bold text-white">{preview.title}</h3>
+          <p className="mt-1 text-xs leading-relaxed text-white/70">{preview.summary}</p>
         </div>
       </div>
       <div className="grid gap-2 p-3 sm:grid-cols-2">
         {Object.entries(preview.fields).map(([key, value]) => (
-          <div key={key} className="min-w-0 rounded-md border border-white/10 bg-white/[0.03] p-2">
-            <p className="text-[10px] uppercase tracking-wide text-cyan-200/50">{key.replaceAll("_", " ")}</p>
-            <p className="mt-1 break-words text-xs text-white">{String(value ?? "")}</p>
+          <div key={key} className="min-w-0 rounded-lg border border-white/5 bg-white/[0.02] p-2 shadow-sm">
+            <p className="text-[9px] uppercase tracking-wider text-white/40 font-serif font-semibold">{key.replaceAll("_", " ")}</p>
+            <p className="mt-1 break-words text-xs text-white/90 font-serif font-medium">{String(value ?? "")}</p>
           </div>
         ))}
       </div>
       {preview.warnings.length > 0 && (
-        <div className="space-y-2 border-t border-cyan-300/10 p-3">
+        <div className="space-y-2 border-t border-white/10 p-3 bg-amber-500/5">
           {preview.warnings.map((w) => (
-            <div key={w} className="flex gap-2 text-xs leading-relaxed text-cyan-50/70">
-              <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-300" /><span>{w}</span>
+            <div key={w} className="flex gap-2 text-xs leading-relaxed text-amber-200 font-serif">
+              <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" /><span>{w}</span>
             </div>
           ))}
         </div>
       )}
-      <div className="flex flex-col gap-2 border-t border-cyan-300/10 p-3 sm:flex-row sm:items-center sm:justify-end">
+      <div className="flex flex-col gap-2 border-t border-white/10 p-3 bg-white/[0.02] sm:flex-row sm:items-center sm:justify-end">
         <button type="button" onClick={onCancel} disabled={isCancelled}
-          className="h-9 rounded-md border border-white/10 px-3 text-xs font-medium text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:text-white/35">
+          className="h-9 rounded-lg border border-white/10 px-3 text-xs font-serif font-semibold text-white/75 bg-white/[0.03] hover:bg-white hover:text-black transition-all shadow-sm cursor-pointer uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed">
           {isCancelled ? "Cancelled" : "Cancel"}
         </button>
         <button type="button" disabled
-          className="h-9 rounded-md border border-cyan-300/15 bg-cyan-300/10 px-3 text-xs font-medium text-cyan-100/45"
+          className="h-9 rounded-lg border border-white/10 bg-white/5 text-white/30 px-3 text-xs font-serif font-semibold uppercase tracking-wider"
           title={executionEnabled ? "Live execution is not connected in this beta route." : "This preview cannot execute."}>
           Confirm locked
         </button>
@@ -996,10 +992,16 @@ function GenericPreviewCard({ preview, executionEnabled, isCancelled, onCancel }
 // ─── Utility ───────────────────────────────────────────────────
 
 function RiskBadge({ score }: { score: RiskScore }) {
-  const c = { low: "green", medium: "yellow", high: "orange", critical: "red" }[score];
+  const colors = {
+    low: { text: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/30" },
+    medium: { text: "text-amber-400", bg: "bg-amber-500/10", border: "border-amber-500/30" },
+    high: { text: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30" },
+    critical: { text: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30" }
+  }[score];
+
   const label = { low: "Low Risk", medium: "Medium Risk", high: "High Risk", critical: "Critical Risk" }[score];
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-${c}-400 bg-${c}-500/10 border border-${c}-500/30`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-serif font-semibold ${colors.text} ${colors.bg} border ${colors.border} shadow-sm`}>
       <Shield className="w-2.5 h-2.5" /> {label}
     </span>
   );
@@ -1007,16 +1009,16 @@ function RiskBadge({ score }: { score: RiskScore }) {
 
 function TierBadge({ tier }: { tier: string }) {
   if (tier === "verified") return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/30">
-      <CheckCircle className="w-2.5 h-2.5" /> Verified
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-serif font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 shadow-sm">
+      <CheckCircle className="w-2.5 h-2.5 text-emerald-400" /> Verified
     </span>
   );
   if (tier === "unverified") return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-red-400 bg-red-500/10 border border-red-500/30">
-      <AlertTriangle className="w-2.5 h-2.5" /> Unverified
+    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-serif font-semibold text-red-400 bg-red-500/10 border border-red-500/30 shadow-sm">
+      <AlertTriangle className="w-2.5 h-2.5 text-red-400" /> Unverified
     </span>
   );
-  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-white/60 bg-white/5 border border-white/10">Standard</span>;
+  return <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-serif font-semibold text-white/70 bg-white/5 border border-white/10 shadow-sm">Standard</span>;
 }
 
 function createMessageId() {
